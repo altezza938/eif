@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EIF QA Vision Verifier</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #1e293b; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-sky-500 selection:text-white">
+
+    <!-- Passphrase Gate -->
+    <div id="gate" class="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950 p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-sm w-full p-8 shadow-2xl flex flex-col items-center text-center gap-4">
+            <span class="text-4xl">🔐</span>
+            <h2 class="text-lg font-bold text-white">EIF QA Vision Verifier</h2>
+            <p class="text-xs text-slate-400 leading-relaxed">Enter the access passphrase to unlock the vision audit engine.</p>
+            <input type="password" id="gate-input" placeholder="passphrase" class="w-full bg-slate-950 border border-slate-700 px-4 py-2.5 rounded-lg text-sm text-white focus:outline-none focus:border-sky-500" onkeydown="if(event.key==='Enter')unlock()">
+            <button onclick="unlock()" class="w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm py-2.5 rounded-lg transition">Unlock</button>
+            <p id="gate-error" class="text-rose-400 text-xs hidden">Incorrect passphrase.</p>
+        </div>
+    </div>
+
+    <header class="border-b border-slate-800 bg-slate-900/50 backdrop-blur px-6 py-4 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+                <h1 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                    <span class="text-sky-400">🗺️</span> EIF Visual Audit Center
+                </h1>
+                <p class="text-xs text-slate-400 mt-1">Photos stay local — only the selected image bytes are sent to Google Gemini for vision analysis.</p>
+            </div>
+            <div class="flex items-center gap-3 bg-slate-800/80 px-4 py-2 rounded-lg border border-slate-700">
+                <div class="flex flex-col text-right">
+                    <span class="text-xs text-slate-400 font-semibold uppercase tracking-wider">Vision Engine</span>
+                    <span class="text-sky-400 text-sm font-bold">Gemini 2.0 Flash</span>
+                </div>
+                <button onclick="testConnection()" class="bg-sky-600 hover:bg-sky-500 text-white text-xs px-3 py-1.5 rounded-md transition font-semibold">Test</button>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-7xl mx-auto w-full p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div class="lg:col-span-7 flex flex-col gap-6">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="border-2 border-dashed border-slate-800 hover:border-sky-500/50 transition bg-slate-900/40 p-4 rounded-xl flex flex-col items-center justify-center text-center cursor-pointer relative">
+                    <input type="file" id="shp-zip" accept=".zip" class="absolute inset-0 opacity-0 cursor-pointer" onchange="handleShapefileZip(this)">
+                    <span class="text-2xl mb-1">📁</span>
+                    <h3 class="text-xs font-semibold text-white">GIS Shapefile ZIP</h3>
+                    <p class="text-[10px] text-slate-400 mt-1 max-w-[200px]" id="shp-status">Upload folder containing your merged .dbf file</p>
+                </div>
+                <div class="border-2 border-dashed border-slate-800 hover:border-sky-500/50 transition bg-slate-900/40 p-4 rounded-xl flex flex-col items-center justify-center text-center cursor-pointer relative">
+                    <input type="file" id="photos-zip" accept=".zip" class="absolute inset-0 opacity-0 cursor-pointer" onchange="handlePhotosZip(this)">
+                    <span class="text-2xl mb-1">📦</span>
+                    <h3 class="text-xs font-semibold text-white">Captured Photos ZIP</h3>
+                    <p class="text-[10px] text-slate-400 mt-1 max-w-[200px]" id="photos-status">Upload photo folder archive as a .zip file</p>
+                </div>
+                <div class="border-2 border-dashed border-slate-800 hover:border-sky-500/50 transition bg-slate-900/40 p-4 rounded-xl flex flex-col items-center justify-center text-center cursor-pointer relative">
+                    <input type="file" id="photos-folder" webkitdirectory directory multiple class="absolute inset-0 opacity-0 cursor-pointer" onchange="handlePhotosFolder(this)">
+                    <span class="text-2xl mb-1">📂</span>
+                    <h3 class="text-xs font-semibold text-white">Captured Photos Folder</h3>
+                    <p class="text-[10px] text-slate-400 mt-1 max-w-[200px]" id="folder-status">Select your local "18 Photo Plate" folder directly</p>
+                </div>
+            </div>
+
+            <div class="bg-slate-900/55 rounded-xl border border-slate-800 flex-1 flex flex-col overflow-hidden min-h-[400px]">
+                <div class="p-4 border-b border-slate-800 bg-slate-900/80 flex items-center justify-between gap-2 flex-wrap">
+                    <h3 class="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">
+                        🕵️ Audit Registry Records
+                        <span id="record-count" class="bg-slate-800 text-sky-400 px-2 py-0.5 rounded-full text-[10px] font-bold">0 / 0</span>
+                        <span id="flat-warning-badge" class="hidden bg-amber-500/10 text-amber-500 border border-amber-500/30 px-2.5 py-0.5 rounded-full text-[10px] font-bold">⚠️ Flat Photo Matching Mode</span>
+                    </h3>
+                    <div class="flex items-center gap-2">
+                        <input type="text" id="search-input" oninput="searchAndFilter()" placeholder="Search EIF No or Fac Type..." class="bg-slate-950 border border-slate-800 px-3 py-1 rounded text-xs text-white focus:outline-none focus:border-sky-500 w-48">
+                        <button onclick="runAutoAudit()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1 rounded transition font-bold">Audit Filtered</button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-y-auto custom-scrollbar max-h-[500px]">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="bg-slate-950/50 text-[10px] uppercase text-slate-400 font-bold border-b border-slate-800">
+                                <th class="p-3">EIF ID No</th>
+                                <th class="p-3">Expected FAC_TYPE</th>
+                                <th class="p-3">Status</th>
+                                <th class="p-3">AI Verdict</th>
+                                <th class="p-3 text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="registry-rows" class="divide-y divide-slate-800/60 text-xs">
+                            <tr><td colspan="5" class="p-8 text-center text-slate-500 animate-pulse">Please drag and drop your GIS Shapefile ZIP and load your photo directory above.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="lg:col-span-5 flex flex-col gap-6">
+            <div class="bg-slate-900/55 rounded-xl border border-slate-800 p-5 flex flex-col gap-4 sticky top-24">
+                <h3 class="text-sm font-bold text-white border-b border-slate-800 pb-2">👁️ Visual Audit Inspector Pane</h3>
+                <div id="inspector-placeholder" class="py-20 text-center text-slate-500 text-xs">Select any EIF registry row on the left to inspect matched photo characteristics side-by-side with database records.</div>
+                <div id="inspector-workspace" class="hidden flex flex-col gap-4">
+                    <div class="bg-slate-950 rounded-lg border border-slate-800 aspect-video overflow-hidden flex items-center justify-center relative">
+                        <img id="inspector-img" class="max-h-full max-w-full object-contain" src="" alt="GIS Plate Capture Preview">
+                        <span id="img-badge" class="absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold"></span>
+                    </div>
+                    <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+                        <span class="text-[10px] text-slate-400 block uppercase font-bold">Expected Facility Classification Category</span>
+                        <h2 id="inspector-fac-type" class="text-lg font-bold text-sky-400 mt-0.5">Unknown</h2>
+                        <span id="inspector-eif" class="text-xs text-slate-400 mt-1 block">EIF_ID: N/A</span>
+                    </div>
+                    <div id="inspector-verdict-box" class="hidden p-4 rounded-lg border flex flex-col gap-2">
+                        <div class="flex items-center justify-between">
+                            <h4 class="text-xs font-bold uppercase tracking-wider text-white">AI Verdict Results</h4>
+                            <span id="inspector-confidence" class="text-xs font-bold bg-slate-850 px-2 py-0.5 rounded text-sky-400 border border-slate-700"></span>
+                        </div>
+                        <p id="inspector-verdict-text" class="text-xs text-slate-300 leading-relaxed"></p>
+                    </div>
+                    <button id="inspect-audit-btn" class="w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs py-2.5 rounded-lg transition">Run Quality Assurance Check on Selected Row</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div id="alert-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-sm">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-sm w-full p-6 shadow-2xl flex flex-col items-center text-center gap-4">
+            <span id="modal-icon" class="text-3xl"></span>
+            <h4 id="modal-title" class="text-sm font-bold text-white">Alert Title</h4>
+            <div id="modal-desc" class="text-xs text-slate-400 leading-relaxed"></div>
+            <button onclick="closeModal()" class="bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold px-6 py-2 rounded-lg transition w-full">Dismiss</button>
+        </div>
+    </div>
+
+    <script>
+        // Encrypted Gemini API key (XOR with passphrase, base64).
+        // Without the correct passphrase, this is unusable garbage.
+        const ENCRYPTED_KEY = "ICwZDj4YJDssNEwdUyc9NjYZAjolOioFATAqWyMfKlQvGkAmEhEY";
+        const KEY_LENGTH = 39;
+        let API_KEY = null;
+        const GEMINI_MODEL = "gemini-2.0-flash";
+
+        function unlock() {
+            const pass = document.getElementById('gate-input').value;
+            if (!pass) return;
+            try {
+                const bin = atob(ENCRYPTED_KEY);
+                let decoded = "";
+                for (let i = 0; i < bin.length; i++) {
+                    decoded += String.fromCharCode(bin.charCodeAt(i) ^ pass.charCodeAt(i % pass.length));
+                }
+                // Validate shape: Gemini keys start with "AIza" and are 39 chars
+                if (decoded.length === KEY_LENGTH && decoded.startsWith("AIza")) {
+                    API_KEY = decoded;
+                    document.getElementById('gate').style.display = 'none';
+                } else {
+                    document.getElementById('gate-error').classList.remove('hidden');
+                }
+            } catch (e) {
+                document.getElementById('gate-error').classList.remove('hidden');
+            }
+        }
+
+        let dbfData = null;
+        let photosCache = {};
+        let hasFolderStructure = false;
+        let filteredRecords = [];
+        let auditResults = {};
+        let selectedRecordIndex = null;
+
+        function showAlert(title, description, icon = "ℹ️") {
+            document.getElementById('modal-icon').innerText = icon;
+            document.getElementById('modal-title').innerText = title;
+            document.getElementById('modal-desc').innerHTML = description;
+            document.getElementById('alert-modal').classList.remove('hidden');
+        }
+        function closeModal() { document.getElementById('alert-modal').classList.add('hidden'); }
+
+        async function testConnection() {
+            if (!API_KEY) { showAlert("Locked", "Enter the passphrase first.", "🔒"); return; }
+            try {
+                const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(API_KEY)}`);
+                if (r.ok) showAlert("Connection OK", `Gemini key valid. Model: ${GEMINI_MODEL}`, "🟢");
+                else showAlert("Auth Failed", `Status ${r.status}. Check referrer restriction in Google Cloud Console allows this origin.`, "🔴");
+            } catch (err) {
+                showAlert("Connection Failed", `Network error: ${err.message}`, "🔴");
+            }
+        }
+
+        async function handleShapefileZip(input) {
+            const file = input.files[0]; if (!file) return;
+            document.getElementById('shp-status').innerText = "Loading archive...";
+            try {
+                const zip = await JSZip.loadAsync(file);
+                let dbfFile = null;
+                for (let key in zip.files) if (key.toLowerCase().endsWith('.dbf')) { dbfFile = zip.files[key]; break; }
+                if (!dbfFile) throw new Error("Missing .dbf file inside Shapefile ZIP.");
+                const dbfBuffer = await dbfFile.async("arraybuffer");
+                dbfData = parseDBF(dbfBuffer);
+                document.getElementById('shp-status').innerText = `${dbfFile.name.split('/').pop()} parsed!`;
+                buildRegistryTable();
+            } catch (err) {
+                document.getElementById('shp-status').innerText = "Error parsing file.";
+                showAlert("Processing Error", err.message, "⚠️");
+            }
+        }
+
+        async function handlePhotosFolder(input) {
+            const files = input.files; if (!files || files.length === 0) return;
+            document.getElementById('folder-status').innerText = "Mapping folder...";
+            try {
+                photosCache = {}; hasFolderStructure = false; let count = 0;
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    const name = file.name.toLowerCase();
+                    if (name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.png')) {
+                        const relPath = file.webkitRelativePath.toLowerCase().replace(/\\/g, '/');
+                        if (relPath.includes('/')) hasFolderStructure = true;
+                        photosCache[relPath] = { type: 'file', data: file };
+                        count++;
+                    }
+                }
+                document.getElementById('folder-status').innerText = `Indexed ${count} photos!`;
+                buildRegistryTable();
+                showAlert("Folder Indexed", `Mapped <b>${count}</b> site photos. They stay on your machine — only the audited image bytes are sent to Gemini.`, "🟢");
+            } catch (err) {
+                document.getElementById('folder-status').innerText = "Error reading folder.";
+                showAlert("Folder Indexing Error", err.message, "⚠️");
+            }
+        }
+
+        async function handlePhotosZip(input) {
+            const file = input.files[0]; if (!file) return;
+            document.getElementById('photos-status').innerText = "Reading ZIP...";
+            try {
+                const zip = await JSZip.loadAsync(file);
+                photosCache = {}; hasFolderStructure = false; let count = 0;
+                for (let key in zip.files) {
+                    const entry = zip.files[key];
+                    if (!entry.dir && (key.toLowerCase().endsWith('.jpg') || key.toLowerCase().endsWith('.jpeg') || key.toLowerCase().endsWith('.png'))) {
+                        const relPath = key.toLowerCase().replace(/\\/g, '/');
+                        if (relPath.includes('/')) hasFolderStructure = true;
+                        photosCache[relPath] = { type: 'zip', data: entry };
+                        count++;
+                    }
+                }
+                document.getElementById('photos-status').innerText = `Cached ${count} zipped photos!`;
+                buildRegistryTable();
+                showAlert("ZIP Indexed", `Indexed <b>${count}</b> files.`, "🟢");
+            } catch (err) {
+                document.getElementById('photos-status').innerText = "Error unzipping photos.";
+                showAlert("Extraction Error", err.message, "⚠️");
+            }
+        }
+
+        function parseDBF(arrayBuffer) {
+            const view = new DataView(arrayBuffer);
+            const bytes = new Uint8Array(arrayBuffer);
+            const numRecords = view.getUint32(4, true);
+            const headerLength = view.getUint16(8, true);
+            const recordLength = view.getUint16(10, true);
+            const fields = [];
+            let offset = 32;
+            while (offset < headerLength && bytes[offset] !== 0x0D) {
+                let name = "";
+                for (let i = 0; i < 11; i++) { if (bytes[offset + i] === 0) break; name += String.fromCharCode(bytes[offset + i]); }
+                const type = String.fromCharCode(bytes[offset + 11]);
+                const length = bytes[offset + 16];
+                fields.push({ name, type, length });
+                offset += 32;
+            }
+            const records = [];
+            let recordOffset = headerLength;
+            const decoder = new TextDecoder('utf-8');
+            for (let r = 0; r < numRecords; r++) {
+                if (recordOffset + recordLength > bytes.length) break;
+                const isDeleted = bytes[recordOffset] === 0x2A;
+                if (!isDeleted) {
+                    const record = {}; let fieldOffset = 1;
+                    for (const field of fields) {
+                        const fieldBytes = bytes.slice(recordOffset + fieldOffset, recordOffset + fieldOffset + field.length);
+                        record[field.name] = decoder.decode(fieldBytes).trim();
+                        fieldOffset += field.length;
+                    }
+                    records.push(record);
+                }
+                recordOffset += recordLength;
+            }
+            return { fields, records };
+        }
+
+        function searchAndFilter() { if (dbfData) buildRegistryTable(); }
+
+        function buildRegistryTable() {
+            if (!dbfData) return;
+            const tbody = document.getElementById('registry-rows');
+            tbody.innerHTML = "";
+            const term = document.getElementById('search-input').value.trim().toLowerCase();
+            const records = dbfData.records;
+            filteredRecords = [];
+            records.forEach((rec, idx) => {
+                const eif = (rec.EIF_NO || rec.EIF_ID || `REC_${idx}`).toLowerCase();
+                const facType = (rec.FAC_TYPE || "Unknown").toLowerCase();
+                if (term === "" || eif.includes(term) || facType.includes(term)) {
+                    filteredRecords.push({ record: rec, originalIndex: idx });
+                }
+            });
+            document.getElementById('record-count').innerText = `${filteredRecords.length} / ${records.length}`;
+            const warningBadge = document.getElementById('flat-warning-badge');
+            if (Object.keys(photosCache).length > 0 && !hasFolderStructure) warningBadge.classList.remove('hidden');
+            else warningBadge.classList.add('hidden');
+
+            const limit = 200;
+            const renderList = filteredRecords.slice(0, limit);
+            if (renderList.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" class="p-8 text-center text-slate-500 italic">No matching GIS records found.</td></tr>`;
+                return;
+            }
+            renderList.forEach((item) => {
+                const rec = item.record; const idx = item.originalIndex;
+                const eif = rec.EIF_NO || rec.EIF_ID || `REC_${idx}`;
+                const facType = rec.FAC_TYPE || "Unknown";
+                const hyperlink = rec.HYPERLINK || "";
+                const isFound = resolvePhoto(hyperlink) ? true : false;
+                const statusColor = isFound ? "text-emerald-400" : "text-amber-500";
+                const statusText = isFound ? "Photo Found" : "Photo Missing";
+                const audit = auditResults[eif];
+                let verdictBadge = `<span class="text-slate-500">Unchecked</span>`;
+                if (audit) {
+                    const bColor = audit.verdict === 'MATCH' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' :
+                                   audit.verdict === 'MISMATCH' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30' :
+                                   'bg-amber-500/10 text-amber-400 border border-amber-500/30';
+                    verdictBadge = `<span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold ${bColor}">${audit.verdict}</span>`;
+                }
+                const tr = document.createElement('tr');
+                tr.className = `hover:bg-slate-900/40 cursor-pointer transition ${selectedRecordIndex === idx ? 'bg-sky-950/20 border-l-2 border-sky-500' : ''}`;
+                tr.onclick = () => selectRecord(idx);
+                tr.innerHTML = `
+                    <td class="p-3 font-semibold text-white">${eif}</td>
+                    <td class="p-3 text-slate-300 max-w-[200px] truncate">${facType}</td>
+                    <td class="p-3 font-medium ${statusColor}">${statusText}</td>
+                    <td class="p-3">${verdictBadge}</td>
+                    <td class="p-3 text-right">
+                        <button onclick="triggerImmediateRowAudit('${eif}', event)" class="${isFound ? 'bg-sky-600 hover:bg-sky-500' : 'bg-slate-800 text-slate-500 cursor-not-allowed'} px-2 py-1 rounded text-[10px] text-white transition font-bold" ${!isFound ? 'disabled' : ''}>Audit</button>
+                    </td>`;
+                tbody.appendChild(tr);
+            });
+            if (filteredRecords.length > limit) {
+                const moreTr = document.createElement('tr');
+                moreTr.innerHTML = `<td colspan="5" class="p-3 text-center text-slate-500 bg-slate-950/30 italic text-[11px]">Showing top ${limit} matches. Use search to refine.</td>`;
+                tbody.appendChild(moreTr);
+            }
+        }
+
+        function resolvePhoto(hyperlink) {
+            if (!hyperlink) return null;
+            const cleanPath = hyperlink.replace(/\\/g, '/').toLowerCase();
+            const parts = cleanPath.split('/').filter(p => p.trim() !== "");
+            if (parts.length === 0) return null;
+            const filename = parts[parts.length - 1];
+            const folder = parts.length > 1 ? parts[parts.length - 2] : '';
+            const parentFolder = parts.length > 2 ? parts[parts.length - 3] : '';
+            const cacheKeys = Object.keys(photosCache);
+            if (cacheKeys.length === 0) return null;
+            const candidate3 = parentFolder && folder ? `${parentFolder}/${folder}/${filename}` : null;
+            const candidate2 = folder ? `${folder}/${filename}` : null;
+            const candidate1 = filename;
+            if (hasFolderStructure) {
+                for (let key of cacheKeys) {
+                    if (candidate3 && key.endsWith(candidate3)) return photosCache[key];
+                    if (candidate2 && key.endsWith(candidate2)) return photosCache[key];
+                }
+                return null;
+            } else {
+                for (let key of cacheKeys) {
+                    if (key === candidate1 || key.endsWith('/' + candidate1)) return photosCache[key];
+                }
+            }
+            return null;
+        }
+
+        async function getBase64OfPhoto(photoObj) {
+            if (photoObj.type === 'file') {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result.split(',')[1]);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(photoObj.data);
+                });
+            } else if (photoObj.type === 'zip') {
+                return await photoObj.data.async("base64");
+            }
+            throw new Error("Unknown Photo Object Reference.");
+        }
+
+        function selectRecord(idx) {
+            selectedRecordIndex = idx;
+            const rows = document.querySelectorAll('#registry-rows tr');
+            rows.forEach((row) => row.classList.remove('bg-sky-950/20', 'border-l-2', 'border-sky-500'));
+            const record = dbfData.records[idx];
+            const eif = record.EIF_NO || record.EIF_ID || `REC_${idx}`;
+            const facType = record.FAC_TYPE || "Unknown";
+            const hyperlink = record.HYPERLINK || "";
+            const photoObj = resolvePhoto(hyperlink);
+
+            document.getElementById('inspector-placeholder').classList.add('hidden');
+            document.getElementById('inspector-workspace').classList.remove('hidden');
+            const imgElement = document.getElementById('inspector-img');
+            const badge = document.getElementById('img-badge');
+            if (imgElement.src && imgElement.src.startsWith('blob:')) URL.revokeObjectURL(imgElement.src);
+
+            if (photoObj) {
+                badge.innerText = "LINK MATCH";
+                badge.className = "absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500 text-slate-950";
+                if (photoObj.type === 'file') {
+                    imgElement.src = URL.createObjectURL(photoObj.data);
+                } else {
+                    const extractingSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="250" viewBox="0 0 400 250" fill="none"><rect width="400" height="250" fill="#0f172a"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#38bdf8" font-family="system-ui, sans-serif" font-size="12">Extracting zipped image...</text></svg>`;
+                    imgElement.src = `data:image/svg+xml;utf8,${encodeURIComponent(extractingSvg)}`;
+                    photoObj.data.async("base64").then(base64 => { imgElement.src = `data:image/jpeg;base64,${base64}`; });
+                }
+            } else {
+                const cleanFilename = hyperlink ? hyperlink.split('\\').pop().split('/').pop() : "";
+                const svgString = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="250" viewBox="0 0 400 250" fill="none"><rect width="400" height="250" fill="#0f172a"/><rect x="2" y="2" width="396" height="246" rx="6" stroke="#334155" stroke-width="2" stroke-dasharray="4 4"/><circle cx="200" cy="115" r="30" stroke="#475569" stroke-width="3" fill="none"/><line x1="185" y1="100" x2="215" y2="130" stroke="#475569" stroke-width="3" stroke-linecap="round"/><text x="50%" y="175" dominant-baseline="middle" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="13" font-weight="600">No Photo Plate Match Found</text><text x="50%" y="200" dominant-baseline="middle" text-anchor="middle" fill="#475569" font-family="system-ui, sans-serif" font-size="11">${cleanFilename}</text></svg>`;
+                imgElement.src = `data:image/svg+xml;utf8,${encodeURIComponent(svgString)}`;
+                badge.innerText = "NO MATCH";
+                badge.className = "absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500 text-white";
+            }
+
+            document.getElementById('inspector-fac-type').innerText = facType;
+            document.getElementById('inspector-eif').innerText = `EIF No: ${eif}`;
+            const inspectBtn = document.getElementById('inspect-audit-btn');
+            inspectBtn.disabled = !photoObj;
+            inspectBtn.className = photoObj ? "w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs py-2.5 rounded-lg transition" : "w-full bg-slate-800 text-slate-500 font-semibold text-xs py-2.5 rounded-lg cursor-not-allowed";
+            inspectBtn.onclick = async () => {
+                if (!photoObj) return;
+                inspectBtn.disabled = true;
+                inspectBtn.innerText = "Processing image...";
+                try {
+                    const base64Img = await getBase64OfPhoto(photoObj);
+                    await runAudit(eif, facType, base64Img);
+                } catch (err) {
+                    showAlert("Image Preparation Failed", err.message, "❌");
+                } finally {
+                    inspectBtn.innerText = "Run Quality Assurance Check on Selected Row";
+                    inspectBtn.disabled = false;
+                }
+            };
+
+            const verdictBox = document.getElementById('inspector-verdict-box');
+            const cachedAudit = auditResults[eif];
+            if (cachedAudit) {
+                verdictBox.classList.remove('hidden');
+                document.getElementById('inspector-confidence').innerText = cachedAudit.confidence;
+                document.getElementById('inspector-verdict-text').innerHTML = `<b>${cachedAudit.verdict}:</b> ${cachedAudit.reason}`;
+                const bBorder = cachedAudit.verdict === 'MATCH' ? 'border-emerald-500/30 bg-emerald-500/5' :
+                                cachedAudit.verdict === 'MISMATCH' ? 'border-rose-500/30 bg-rose-500/5' :
+                                'border-amber-500/30 bg-amber-500/5';
+                verdictBox.className = `p-4 rounded-lg border flex flex-col gap-2 ${bBorder}`;
+            } else {
+                verdictBox.classList.add('hidden');
+            }
+        }
+
+        function triggerImmediateRowAudit(eif, event) {
+            event.stopPropagation();
+            const record = dbfData.records.find(r => (r.EIF_NO || r.EIF_ID) === eif);
+            const photoObj = resolvePhoto(record.HYPERLINK);
+            if (!photoObj) return;
+            showAlert("Processing", `Auditing EIF record: <b>${eif}</b>...`, "🤖");
+            getBase64OfPhoto(photoObj).then(base64Img => runAudit(eif, record.FAC_TYPE, base64Img))
+                .catch(err => showAlert("Audit Failed", err.message, "❌"));
+        }
+
+        async function callGemini(prompt, base64Img) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(API_KEY)}`;
+            const body = {
+                contents: [{
+                    parts: [
+                        { text: prompt },
+                        { inline_data: { mime_type: "image/jpeg", data: base64Img } }
+                    ]
+                }],
+                generationConfig: { temperature: 0.1 }
+            };
+            const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            if (!r.ok) throw new Error(`Gemini ${r.status}: ${await r.text()}`);
+            const data = await r.json();
+            return data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        }
+
+        async function runAudit(eif, expectedType, base64Img) {
+            if (!base64Img) return;
+            if (!API_KEY) { showAlert("Locked", "Reload and enter the passphrase.", "🔒"); return; }
+            const inspectBtn = document.getElementById('inspect-audit-btn');
+            inspectBtn.innerText = "Analyzing...";
+            inspectBtn.disabled = true;
+
+            const prompt = `You are performing data quality assurance for an engineering facility database mapping project.
+Your sole objective is to verify if the structural environment shown in this picture corresponds to the designated facility category type listed below.
+
+DESIGNATED FACILITY TYPE (EXPECTED): ${expectedType}
+
+Respond exactly in this layout format:
+VERDICT: [MATCH or MISMATCH or PARTIAL]
+CONFIDENCE: [Confidence percentage, e.g. 95%]
+REASON: [Brief 2 sentence explanation of matched or mismatching physical visual details]`;
+
+            try {
+                const aiResponse = await callGemini(prompt, base64Img);
+                if (!aiResponse) throw new Error("Empty response from Gemini.");
+                auditResults[eif] = parseAIResponse(aiResponse);
+                buildRegistryTable();
+                if (selectedRecordIndex !== null) {
+                    const currentEif = dbfData.records[selectedRecordIndex].EIF_NO || dbfData.records[selectedRecordIndex].EIF_ID;
+                    if (currentEif === eif) selectRecord(selectedRecordIndex);
+                }
+                closeModal();
+            } catch (err) {
+                showAlert("Audit Failed", `${err.message}<br><br>If you see a 403, check the API key's HTTP referrer restriction in Google Cloud Console.`, "❌");
+            } finally {
+                inspectBtn.innerText = "Run Quality Assurance Check on Selected Row";
+                inspectBtn.disabled = false;
+            }
+        }
+
+        function parseAIResponse(text) {
+            const verdictMatch = text.match(/VERDICT:\s*(MATCH|MISMATCH|PARTIAL|UNCERTAIN)/i);
+            const confidenceMatch = text.match(/CONFIDENCE:\s*(\d+%?\s*)/i);
+            const reasonMatch = text.match(/REASON:\s*([\s\S]+)/i);
+            return {
+                verdict: verdictMatch ? verdictMatch[1].toUpperCase() : 'PARTIAL',
+                confidence: confidenceMatch ? confidenceMatch[1].trim() : 'N/A',
+                reason: reasonMatch ? reasonMatch[1].trim() : text
+            };
+        }
+
+        async function runAutoAudit() {
+            if (!dbfData || filteredRecords.length === 0) return;
+            let successCount = 0;
+            showAlert("Batch Audit Started", `Auditing <b>${filteredRecords.length}</b> filtered records. Throttled for free-tier limits.`, "🤖");
+            for (let item of filteredRecords) {
+                const rec = item.record;
+                const eif = rec.EIF_NO || rec.EIF_ID;
+                const photoObj = resolvePhoto(rec.HYPERLINK);
+                if (photoObj && !auditResults[eif]) {
+                    try {
+                        const base64Data = await getBase64OfPhoto(photoObj);
+                        await runAudit(eif, rec.FAC_TYPE, base64Data);
+                        successCount++;
+                        await new Promise(r => setTimeout(r, 1500));
+                    } catch (e) { console.error(e); break; }
+                }
+            }
+            showAlert("Batch Audit Complete", `Successfully audited ${successCount} assets.`, "🎉");
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('gate-input').focus();
+        });
+    </script>
+</body>
+</html>
