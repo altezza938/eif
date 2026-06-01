@@ -37,7 +37,7 @@
             <div class="flex items-center gap-3 bg-slate-800/80 px-4 py-2 rounded-lg border border-slate-700">
                 <div class="flex flex-col text-right">
                     <span class="text-xs text-slate-400 font-semibold uppercase tracking-wider">Vision Engine</span>
-                    <span class="text-sky-400 text-sm font-bold">Gemini 2.0 Flash</span>
+                    <span class="text-sky-400 text-sm font-bold">Gemini 2.5 Flash</span>
                 </div>
                 <button onclick="testConnection()" class="bg-sky-600 hover:bg-sky-500 text-white text-xs px-3 py-1.5 rounded-md transition font-semibold">Test</button>
             </div>
@@ -140,7 +140,7 @@
         const ENCRYPTED_KEY = "ICwZDj4YJDssNEwdUyc9NjYZAjolOioFATAqWyMfKlQvGkAmEhEY";
         const KEY_LENGTH = 39;
         let API_KEY = null;
-        const GEMINI_MODEL = "gemini-2.0-flash";
+        const GEMINI_MODEL = "gemini-2.5-flash";
 
         function unlock() {
             const pass = document.getElementById('gate-input').value;
@@ -169,6 +169,14 @@
         let filteredRecords = [];
         let auditResults = {};
         let selectedRecordIndex = null;
+
+        function mimeFromName(name) {
+            const lower = (name || "").toLowerCase();
+            if (lower.endsWith('.png')) return 'image/png';
+            if (lower.endsWith('.webp')) return 'image/webp';
+            if (lower.endsWith('.gif')) return 'image/gif';
+            return 'image/jpeg';
+        }
 
         function showAlert(title, description, icon = "ℹ️") {
             document.getElementById('modal-icon').innerText = icon;
@@ -218,7 +226,7 @@
                     if (name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.png')) {
                         const relPath = file.webkitRelativePath.toLowerCase().replace(/\\/g, '/');
                         if (relPath.includes('/')) hasFolderStructure = true;
-                        photosCache[relPath] = { type: 'file', data: file };
+                        photosCache[relPath] = { type: 'file', data: file, mime: mimeFromName(name) };
                         count++;
                     }
                 }
@@ -242,7 +250,7 @@
                     if (!entry.dir && (key.toLowerCase().endsWith('.jpg') || key.toLowerCase().endsWith('.jpeg') || key.toLowerCase().endsWith('.png'))) {
                         const relPath = key.toLowerCase().replace(/\\/g, '/');
                         if (relPath.includes('/')) hasFolderStructure = true;
-                        photosCache[relPath] = { type: 'zip', data: entry };
+                        photosCache[relPath] = { type: 'zip', data: entry, mime: mimeFromName(key) };
                         count++;
                     }
                 }
@@ -327,24 +335,51 @@
                 const statusColor = isFound ? "text-emerald-400" : "text-amber-500";
                 const statusText = isFound ? "Photo Found" : "Photo Missing";
                 const audit = auditResults[eif];
-                let verdictBadge = `<span class="text-slate-500">Unchecked</span>`;
+
+                const tr = document.createElement('tr');
+                tr.dataset.recordIndex = idx;
+                tr.className = `hover:bg-slate-900/40 cursor-pointer transition ${selectedRecordIndex === idx ? 'bg-sky-950/20 border-l-2 border-sky-500' : ''}`;
+                tr.onclick = () => selectRecord(idx);
+
+                const eifCell = document.createElement('td');
+                eifCell.className = "p-3 font-semibold text-white";
+                eifCell.textContent = eif;
+
+                const facCell = document.createElement('td');
+                facCell.className = "p-3 text-slate-300 max-w-[200px] truncate";
+                facCell.textContent = facType;
+
+                const statusCell = document.createElement('td');
+                statusCell.className = `p-3 font-medium ${statusColor}`;
+                statusCell.textContent = statusText;
+
+                const verdictCell = document.createElement('td');
+                verdictCell.className = "p-3";
                 if (audit) {
                     const bColor = audit.verdict === 'MATCH' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' :
                                    audit.verdict === 'MISMATCH' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30' :
                                    'bg-amber-500/10 text-amber-400 border border-amber-500/30';
-                    verdictBadge = `<span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold ${bColor}">${audit.verdict}</span>`;
+                    const badge = document.createElement('span');
+                    badge.className = `px-2 py-0.5 rounded text-[10px] uppercase font-bold ${bColor}`;
+                    badge.textContent = audit.verdict;
+                    verdictCell.appendChild(badge);
+                } else {
+                    const unchecked = document.createElement('span');
+                    unchecked.className = "text-slate-500";
+                    unchecked.textContent = "Unchecked";
+                    verdictCell.appendChild(unchecked);
                 }
-                const tr = document.createElement('tr');
-                tr.className = `hover:bg-slate-900/40 cursor-pointer transition ${selectedRecordIndex === idx ? 'bg-sky-950/20 border-l-2 border-sky-500' : ''}`;
-                tr.onclick = () => selectRecord(idx);
-                tr.innerHTML = `
-                    <td class="p-3 font-semibold text-white">${eif}</td>
-                    <td class="p-3 text-slate-300 max-w-[200px] truncate">${facType}</td>
-                    <td class="p-3 font-medium ${statusColor}">${statusText}</td>
-                    <td class="p-3">${verdictBadge}</td>
-                    <td class="p-3 text-right">
-                        <button onclick="triggerImmediateRowAudit('${eif}', event)" class="${isFound ? 'bg-sky-600 hover:bg-sky-500' : 'bg-slate-800 text-slate-500 cursor-not-allowed'} px-2 py-1 rounded text-[10px] text-white transition font-bold" ${!isFound ? 'disabled' : ''}>Audit</button>
-                    </td>`;
+
+                const actionCell = document.createElement('td');
+                actionCell.className = "p-3 text-right";
+                const auditBtn = document.createElement('button');
+                auditBtn.className = `${isFound ? 'bg-sky-600 hover:bg-sky-500' : 'bg-slate-800 text-slate-500 cursor-not-allowed'} px-2 py-1 rounded text-[10px] text-white transition font-bold`;
+                auditBtn.textContent = "Audit";
+                auditBtn.disabled = !isFound;
+                auditBtn.onclick = (event) => triggerImmediateRowAudit(idx, event);
+                actionCell.appendChild(auditBtn);
+
+                tr.append(eifCell, facCell, statusCell, verdictCell, actionCell);
                 tbody.appendChild(tr);
             });
             if (filteredRecords.length > limit) {
@@ -398,7 +433,12 @@
         function selectRecord(idx) {
             selectedRecordIndex = idx;
             const rows = document.querySelectorAll('#registry-rows tr');
-            rows.forEach((row) => row.classList.remove('bg-sky-950/20', 'border-l-2', 'border-sky-500'));
+            rows.forEach((row) => {
+                row.classList.remove('bg-sky-950/20', 'border-l-2', 'border-sky-500');
+                if (Number(row.dataset.recordIndex) === idx) {
+                    row.classList.add('bg-sky-950/20', 'border-l-2', 'border-sky-500');
+                }
+            });
             const record = dbfData.records[idx];
             const eif = record.EIF_NO || record.EIF_ID || `REC_${idx}`;
             const facType = record.FAC_TYPE || "Unknown";
@@ -419,7 +459,7 @@
                 } else {
                     const extractingSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="250" viewBox="0 0 400 250" fill="none"><rect width="400" height="250" fill="#0f172a"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#38bdf8" font-family="system-ui, sans-serif" font-size="12">Extracting zipped image...</text></svg>`;
                     imgElement.src = `data:image/svg+xml;utf8,${encodeURIComponent(extractingSvg)}`;
-                    photoObj.data.async("base64").then(base64 => { imgElement.src = `data:image/jpeg;base64,${base64}`; });
+                    photoObj.data.async("base64").then(base64 => { imgElement.src = `data:${photoObj.mime};base64,${base64}`; });
                 }
             } else {
                 const cleanFilename = hyperlink ? hyperlink.split('\\').pop().split('/').pop() : "";
@@ -440,7 +480,7 @@
                 inspectBtn.innerText = "Processing image...";
                 try {
                     const base64Img = await getBase64OfPhoto(photoObj);
-                    await runAudit(eif, facType, base64Img);
+                    await runAudit(eif, facType, base64Img, photoObj.mime);
                 } catch (err) {
                     showAlert("Image Preparation Failed", err.message, "❌");
                 } finally {
@@ -464,23 +504,25 @@
             }
         }
 
-        function triggerImmediateRowAudit(eif, event) {
+        function triggerImmediateRowAudit(idx, event) {
             event.stopPropagation();
-            const record = dbfData.records.find(r => (r.EIF_NO || r.EIF_ID) === eif);
+            const record = dbfData.records[idx];
+            if (!record) return;
+            const eif = record.EIF_NO || record.EIF_ID || `REC_${idx}`;
             const photoObj = resolvePhoto(record.HYPERLINK);
             if (!photoObj) return;
-            showAlert("Processing", `Auditing EIF record: <b>${eif}</b>...`, "🤖");
-            getBase64OfPhoto(photoObj).then(base64Img => runAudit(eif, record.FAC_TYPE, base64Img))
+            showAlert("Processing", "Auditing selected EIF record...", "🤖");
+            getBase64OfPhoto(photoObj).then(base64Img => runAudit(eif, record.FAC_TYPE, base64Img, photoObj.mime))
                 .catch(err => showAlert("Audit Failed", err.message, "❌"));
         }
 
-        async function callGemini(prompt, base64Img) {
+        async function callGemini(prompt, base64Img, mimeType = "image/jpeg") {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(API_KEY)}`;
             const body = {
                 contents: [{
                     parts: [
                         { text: prompt },
-                        { inline_data: { mime_type: "image/jpeg", data: base64Img } }
+                        { inline_data: { mime_type: mimeType, data: base64Img } }
                     ]
                 }],
                 generationConfig: { temperature: 0.1 }
@@ -491,7 +533,7 @@
             return data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
         }
 
-        async function runAudit(eif, expectedType, base64Img) {
+        async function runAudit(eif, expectedType, base64Img, mimeType = "image/jpeg") {
             if (!base64Img) return;
             if (!API_KEY) { showAlert("Locked", "Reload and enter the passphrase.", "🔒"); return; }
             const inspectBtn = document.getElementById('inspect-audit-btn');
@@ -509,7 +551,7 @@ CONFIDENCE: [Confidence percentage, e.g. 95%]
 REASON: [Brief 2 sentence explanation of matched or mismatching physical visual details]`;
 
             try {
-                const aiResponse = await callGemini(prompt, base64Img);
+                const aiResponse = await callGemini(prompt, base64Img, mimeType);
                 if (!aiResponse) throw new Error("Empty response from Gemini.");
                 auditResults[eif] = parseAIResponse(aiResponse);
                 buildRegistryTable();
@@ -548,7 +590,7 @@ REASON: [Brief 2 sentence explanation of matched or mismatching physical visual 
                 if (photoObj && !auditResults[eif]) {
                     try {
                         const base64Data = await getBase64OfPhoto(photoObj);
-                        await runAudit(eif, rec.FAC_TYPE, base64Data);
+                        await runAudit(eif, rec.FAC_TYPE, base64Data, photoObj.mime);
                         successCount++;
                         await new Promise(r => setTimeout(r, 1500));
                     } catch (e) { console.error(e); break; }
