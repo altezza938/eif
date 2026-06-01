@@ -31,6 +31,7 @@
             <div>
                 <h1 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="text-sky-400">🗺️</span> EIF Visual Audit Center
+                    <span id="app-version" class="bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold"></span>
                 </h1>
                 <p class="text-xs text-slate-400 mt-1">Photos stay local — only the selected image bytes are sent to Google Gemini for vision analysis.</p>
             </div>
@@ -135,6 +136,11 @@
     </div>
 
     <script>
+        // App version — bump this whenever index.html changes so you can confirm
+        // the deployed/cached page matches the latest build (also logged to console).
+        const APP_VERSION = "v1.1.0";
+        const APP_BUILD_DATE = "2026-06-01";
+
         // Encrypted Gemini API key (XOR with passphrase, base64).
         // Without the correct passphrase, this is unusable garbage.
         const ENCRYPTED_KEY = "ICwZDj4YJDssNEwdUyc9NjYZAjolOioFATAqWyMfKlQvGkAmEhEY";
@@ -600,6 +606,13 @@ REASON: [Brief 2 sentence explanation of matched or mismatching physical visual 
         }
 
         document.addEventListener('DOMContentLoaded', () => {
+            const versionEl = document.getElementById('app-version');
+            if (versionEl) {
+                versionEl.textContent = APP_VERSION;
+                versionEl.title = `Build ${APP_BUILD_DATE}`;
+            }
+            document.title = `EIF QA Vision Verifier ${APP_VERSION}`;
+            console.log(`EIF QA Vision Verifier ${APP_VERSION} (build ${APP_BUILD_DATE})`);
             document.getElementById('gate-input').focus();
         });
     </script>
