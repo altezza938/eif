@@ -45,7 +45,7 @@
                     <span id="app-version" class="bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold"></span>
                 </h1>
                 <p class="text-xs text-slate-400 mt-1">GitHub Pages Edition • Fully client-side GIS & photo plate audit tool</p>
-                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.3.1.zip" download
+                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.3.2.zip" download
                    class="inline-flex items-center gap-1.5 mt-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-semibold px-3 py-1.5 rounded-lg transition">
                     ⬇️ Download offline version (.zip)
                 </a>
@@ -215,7 +215,7 @@
     <script>
         // App version — bump this whenever index.html changes so you can confirm
         // the deployed/cached page matches the latest build (also logged to console).
-        const APP_VERSION = "v1.3.1";
+        const APP_VERSION = "v1.3.2";
         const APP_BUILD_DATE = "2026-06-02";
 
         // --- Access gate ---------------------------------------------------------
@@ -1124,19 +1124,31 @@
             URL.revokeObjectURL(url);
         }
 
-        // Gather one export row per filtered record. Uses short, ArcGIS-safe field
-        // names (FAC_REF_NO is the join key back to your GIS layer).
+        // A single, sortable/filterable flag so QA can jump straight to the cases that
+        // need a second look: no photo, not yet audited, or an AI MISMATCH/PARTIAL.
+        function reviewFlag(hasPhoto, audit) {
+            if (!hasPhoto) return "NO PHOTO";
+            if (!audit || !audit.verdict) return "NOT AUDITED";
+            if (audit.verdict === "MATCH") return "OK";
+            if (audit.verdict === "MISMATCH") return "REVIEW: MISMATCH";
+            return "REVIEW: " + audit.verdict; // PARTIAL / UNCERTAIN
+        }
+
+        // Gather one export row per record. Exports the WHOLE registry (not just the
+        // current on-screen filter) so hidden/unmatched rows still reach the file —
+        // use the REVIEW column to filter in Excel/ArcGIS. FAC_REF_NO is the join key
+        // back to your GIS layer; field names are short and ArcGIS-safe.
         function buildExportRows() {
-            return filteredRecords.map(item => {
-                const rec = item.record;
-                const idx = item.originalIndex;
+            return dbfData.records.map((rec, idx) => {
                 const eif = getRecordId(rec, idx);
                 const m = resolveMatch(idx);
+                const hasPhoto = !!(m && m.photo);
                 const audit = auditResults[eif] || {};
                 return {
                     FAC_REF_NO: eif,
                     FAC_TYPE: rec.FAC_TYPE || "Unknown",
-                    PHOTO_FND: (m && m.photo) ? "Y" : "N",
+                    REVIEW: reviewFlag(hasPhoto, audit),
+                    PHOTO_FND: hasPhoto ? "Y" : "N",
                     PHOTO_FILE: (m && m.key) ? m.key.split('/').pop() : "",
                     MATCH_MTHD: (m && m.method) ? m.method : "",
                     AI_VERDICT: audit.verdict || "",
@@ -1149,7 +1161,7 @@
         // CSV with ArcGIS-friendly headers. A CSV can be added to ArcGIS Pro / ArcMap
         // and joined to the facility layer on FAC_REF_NO to push the verdicts back in.
         function exportCSV() {
-            if (!dbfData || filteredRecords.length === 0) {
+            if (!dbfData || dbfData.records.length === 0) {
                 showAlert("Nothing to Export", "Load a shapefile first, then export the registry.", "🟡");
                 return;
             }
@@ -1165,7 +1177,7 @@
         // Excel export via an HTML-table .xls workbook (opens directly in Excel; no
         // external library needed).
         function exportExcel() {
-            if (!dbfData || filteredRecords.length === 0) {
+            if (!dbfData || dbfData.records.length === 0) {
                 showAlert("Nothing to Export", "Load a shapefile first, then export the registry.", "🟡");
                 return;
             }
