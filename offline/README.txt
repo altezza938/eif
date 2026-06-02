@@ -1,4 +1,4 @@
-EIF Visual QA Audit Platform — Offline Edition (v1.3.1)
+EIF Visual QA Audit Platform — Offline Edition (v1.3.2)
 =======================================================
 
 This is a fully self-contained, offline build. No internet connection is
