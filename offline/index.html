@@ -24,6 +24,18 @@
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-sky-500 selection:text-white">
 
+    <!-- Passphrase Gate (access lock) -->
+    <div id="gate" class="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950 p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-sm w-full p-8 shadow-2xl flex flex-col items-center text-center gap-4">
+            <span class="text-4xl">🔐</span>
+            <h2 class="text-lg font-bold text-white">EIF Quality Assurance Workspace</h2>
+            <p class="text-xs text-slate-400 leading-relaxed">Enter the AECOM access passphrase to unlock the audit workspace.</p>
+            <input type="password" id="gate-input" placeholder="passphrase" class="w-full bg-slate-950 border border-slate-700 px-4 py-2.5 rounded-lg text-sm text-white focus:outline-none focus:border-sky-500" onkeydown="if(event.key==='Enter')unlock()">
+            <button onclick="unlock()" class="w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm py-2.5 rounded-lg transition">Unlock</button>
+            <p id="gate-error" class="text-rose-400 text-xs hidden">Incorrect passphrase.</p>
+        </div>
+    </div>
+
     <!-- Header Section -->
     <header class="border-b border-slate-800 bg-slate-900/50 backdrop-blur px-6 py-4 sticky top-0 z-50">
         <div class="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -192,6 +204,35 @@
         const APP_VERSION = "v1.2.0";
         const APP_BUILD_DATE = "2026-06-02";
 
+        // --- Access gate ---------------------------------------------------------
+        // Client-side access lock. The passphrase is verified by XOR-decrypting an
+        // embedded blob and checking the result looks like a Gemini key; this keeps
+        // the plaintext passphrase out of the source while reusing the original
+        // AECOM passphrase. NOTE: a client-side gate deters casual access only — it
+        // is not strong security, since the page source is visible to anyone.
+        const ENCRYPTED_KEY = "ICwZDj4YJDssNEwdUyc9NjYZAjolOioFATAqWyMfKlQvGkAmEhEY";
+        const KEY_LENGTH = 39;
+
+        function unlock() {
+            const pass = document.getElementById('gate-input').value;
+            if (!pass) return;
+            try {
+                const bin = atob(ENCRYPTED_KEY);
+                let decoded = "";
+                for (let i = 0; i < bin.length; i++) {
+                    decoded += String.fromCharCode(bin.charCodeAt(i) ^ pass.charCodeAt(i % pass.length));
+                }
+                // Valid passphrase decrypts to a Gemini-shaped key (starts "AIza", 39 chars).
+                if (decoded.length === KEY_LENGTH && decoded.startsWith("AIza")) {
+                    document.getElementById('gate').style.display = 'none';
+                } else {
+                    document.getElementById('gate-error').classList.remove('hidden');
+                }
+            } catch (e) {
+                document.getElementById('gate-error').classList.remove('hidden');
+            }
+        }
+
         let dbfData = null;
         let photosCache = {}; // key (relative path) -> {type: 'file'/'zip', data: File/ZipEntry}
         let hasFolderStructure = false;
@@ -268,6 +309,9 @@
             ['api-url', 'gemini-key'].forEach(id => {
                 document.getElementById(id).addEventListener('change', saveSettings);
             });
+
+            const gateInput = document.getElementById('gate-input');
+            if (gateInput) gateInput.focus();
         });
 
         // Stable Gemini model id. Dated preview aliases (e.g. *-preview-09-2025) get
