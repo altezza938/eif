@@ -27,11 +27,11 @@
     <!-- Passphrase Gate (access lock) -->
     <div id="gate" class="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950 p-4">
         <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-sm w-full p-8 shadow-2xl flex flex-col items-center text-center gap-4">
-            <span class="text-4xl">🔐</span>
-            <h2 class="text-lg font-bold text-white">EIF Quality Assurance Workspace</h2>
-            <p class="text-xs text-slate-400 leading-relaxed">Enter the AECOM access passphrase to unlock the audit workspace.</p>
-            <input type="password" id="gate-input" placeholder="passphrase" class="w-full bg-slate-950 border border-slate-700 px-4 py-2.5 rounded-lg text-sm text-white focus:outline-none focus:border-sky-500" onkeydown="if(event.key==='Enter')unlock()">
-            <button onclick="unlock()" class="w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm py-2.5 rounded-lg transition">Unlock</button>
+            <span class="text-4xl">🔒</span>
+            <h2 class="text-lg font-bold text-white">Authorized Access Only</h2>
+            <p class="text-xs text-slate-400 leading-relaxed">This workspace and its data are restricted to authorized AECOM personnel. Access or use by unauthorized persons is prohibited. Enter the access passphrase to continue.</p>
+            <input type="password" id="gate-input" placeholder="Access passphrase" class="w-full bg-slate-950 border border-slate-700 px-4 py-2.5 rounded-lg text-sm text-white focus:outline-none focus:border-sky-500" onkeydown="if(event.key==='Enter')unlock()">
+            <button onclick="unlock()" class="w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm py-2.5 rounded-lg transition">Enter</button>
             <p id="gate-error" class="text-rose-400 text-xs hidden">Incorrect passphrase.</p>
         </div>
     </div>
@@ -45,7 +45,7 @@
                     <span id="app-version" class="bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold"></span>
                 </h1>
                 <p class="text-xs text-slate-400 mt-1">GitHub Pages Edition • Fully client-side GIS & photo plate audit tool</p>
-                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.3.3.zip" download
+                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.3.4.zip" download
                    class="inline-flex items-center gap-1.5 mt-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-semibold px-3 py-1.5 rounded-lg transition">
                     ⬇️ Download offline version (.zip)
                 </a>
@@ -215,35 +215,51 @@
     <script>
         // App version — bump this whenever index.html changes so you can confirm
         // the deployed/cached page matches the latest build (also logged to console).
-        const APP_VERSION = "v1.3.3";
+        const APP_VERSION = "v1.3.4";
         const APP_BUILD_DATE = "2026-06-02 19:08 UTC";
 
         // --- Access gate ---------------------------------------------------------
-        // Client-side access lock. The passphrase is verified by XOR-decrypting an
-        // embedded blob and checking the result looks like a Gemini key; this keeps
-        // the plaintext passphrase out of the source while reusing the original
-        // AECOM passphrase. NOTE: a client-side gate deters casual access only — it
-        // is not strong security, since the page source is visible to anyone.
-        const ENCRYPTED_KEY = "ICwZDj4YJDssNEwdUyc9NjYZAjolOioFATAqWyMfKlQvGkAmEhEY";
-        const KEY_LENGTH = 39;
+        // Client-side access lock. The passphrase is verified by deriving a salted
+        // PBKDF2-SHA256 hash and comparing it to the stored hash below — the plaintext
+        // passphrase is NOT present in the source (unlike the previous XOR scheme,
+        // which leaked it). NOTE: this is still only a deterrent: the page source is
+        // public, so a weak passphrase can be brute-forced offline. It is not a
+        // substitute for server-side authentication on sensitive data.
+        const PASS_SALT_HEX = "20657cfadb6e233ec37b374e7b41e0b7";
+        const PASS_ITER = 200000;
+        const PASS_HASH_HEX = "29732d448aee2d7855f3f8a96d1b2ff0955c811a7aebf996d93d157061aee7ef";
 
-        function unlock() {
+        function hexToBytes(hex) {
+            const out = new Uint8Array(hex.length / 2);
+            for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+            return out;
+        }
+        function bytesToHex(bytes) {
+            return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        async function unlock() {
             const pass = document.getElementById('gate-input').value;
+            const errEl = document.getElementById('gate-error');
             if (!pass) return;
             try {
-                const bin = atob(ENCRYPTED_KEY);
-                let decoded = "";
-                for (let i = 0; i < bin.length; i++) {
-                    decoded += String.fromCharCode(bin.charCodeAt(i) ^ pass.charCodeAt(i % pass.length));
-                }
-                // Valid passphrase decrypts to a Gemini-shaped key (starts "AIza", 39 chars).
-                if (decoded.length === KEY_LENGTH && decoded.startsWith("AIza")) {
+                if (!crypto || !crypto.subtle) throw new Error("no-subtle");
+                const keyMaterial = await crypto.subtle.importKey(
+                    'raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveBits']);
+                const bits = await crypto.subtle.deriveBits(
+                    { name: 'PBKDF2', salt: hexToBytes(PASS_SALT_HEX), iterations: PASS_ITER, hash: 'SHA-256' },
+                    keyMaterial, 256);
+                if (bytesToHex(new Uint8Array(bits)) === PASS_HASH_HEX) {
                     document.getElementById('gate').style.display = 'none';
                 } else {
-                    document.getElementById('gate-error').classList.remove('hidden');
+                    errEl.textContent = "Incorrect passphrase.";
+                    errEl.classList.remove('hidden');
                 }
             } catch (e) {
-                document.getElementById('gate-error').classList.remove('hidden');
+                errEl.textContent = (e && e.message === "no-subtle")
+                    ? "Secure crypto unavailable — open this page over https:// or from a local file."
+                    : "Could not verify passphrase.";
+                errEl.classList.remove('hidden');
             }
         }
 
