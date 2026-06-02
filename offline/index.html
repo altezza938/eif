@@ -45,7 +45,7 @@
                     <span id="app-version" class="bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold"></span>
                 </h1>
                 <p class="text-xs text-slate-400 mt-1">GitHub Pages Edition • Fully client-side GIS & photo plate audit tool</p>
-                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.3.0.zip" download
+                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.3.1.zip" download
                    class="inline-flex items-center gap-1.5 mt-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-semibold px-3 py-1.5 rounded-lg transition">
                     ⬇️ Download offline version (.zip)
                 </a>
@@ -215,7 +215,7 @@
     <script>
         // App version — bump this whenever index.html changes so you can confirm
         // the deployed/cached page matches the latest build (also logged to console).
-        const APP_VERSION = "v1.3.0";
+        const APP_VERSION = "v1.3.1";
         const APP_BUILD_DATE = "2026-06-02";
 
         // --- Access gate ---------------------------------------------------------
@@ -367,41 +367,70 @@
             matchCache = {};
             for (const key of Object.keys(photosCache)) {
                 const pathNoExt = key.replace(/\.[^.]+$/, "");
-                const fileBase = pathNoExt.split('/').pop();
+                const slash = pathNoExt.lastIndexOf('/');
+                const dir = slash >= 0 ? pathNoExt.slice(0, slash) : "";
+                const fileBase = pathNoExt.slice(slash + 1);
                 const fileNorm = normalizeRef(fileBase);
+                const folderNorm = normalizeRef(dir);          // e.g. "07sw-c_nh0006/..." -> "07swcnh0006"
                 const pathNorm = normalizeRef(pathNoExt);
-                const entry = { key, fileNorm, pathNorm, photo: photosCache[key] };
+                const entry = { key, fileNorm, folderNorm, pathNorm, photo: photosCache[key] };
                 photoIndex.push(entry);
                 if (fileNorm && !photoExact.has(fileNorm)) photoExact.set(fileNorm, { photo: entry.photo, key });
             }
         }
 
-        // Match a normalised facility reference against the photo index, tiered from
-        // strict to loose so we maximise correct links without too many false hits:
-        //   1. exact filename match           (07sw-c_nh0011_o1_a == file)
-        //   2. filename contains / is contained by the ref (handles extra suffixes
-        //      like "_a"/"_O1" or a ref split across folder+file)
-        //   3. full path contains the ref     (ref spread across folder names)
-        // Returns { photo, key, method } or null.
+        // Match a normalised facility reference against the photo index using a scored,
+        // folder-anchored strategy. Photos are organised one folder per facility
+        // (e.g. "07SW-C_NH0006/"), and a record ref is facility + object suffix
+        // (e.g. "07SW-C/NH0006_C1_c" -> "07swcnh0006" + "c1c"). We therefore anchor on
+        // the folder, then match the remaining suffix against the filename. This is far
+        // more robust than a plain contiguous-substring test (which broke whenever a
+        // filename carried any extra text before/after the object code).
+        // Returns { photo, key, method } picking the single best candidate.
         function matchByRef(ref) {
-            const norm = normalizeRef(ref);
-            if (!norm || photoIndex.length === 0) return null;
+            const R = normalizeRef(ref);
+            if (!R || photoIndex.length === 0) return null;
 
-            const ex = photoExact.get(norm);
+            // Fast path: a filename that normalises to the entire reference.
+            const ex = photoExact.get(R);
             if (ex) return { photo: ex.photo, key: ex.key, method: 'exact' };
 
-            const MIN = 5; // avoid trivial substring hits on very short refs
+            const MIN = 4;
+            let best = null, bestScore = 0;
             for (const p of photoIndex) {
-                if (p.fileNorm && p.fileNorm.includes(norm)) return { photo: p.photo, key: p.key, method: 'contains' };
-                if (norm.length >= MIN && p.fileNorm.length >= MIN && norm.includes(p.fileNorm))
-                    return { photo: p.photo, key: p.key, method: 'contains' };
-            }
-            if (norm.length >= MIN) {
-                for (const p of photoIndex) {
-                    if (p.pathNorm.includes(norm)) return { photo: p.photo, key: p.key, method: 'path' };
+                let score = 0, method = '';
+
+                if (p.fileNorm === R || p.pathNorm === R) {
+                    score = 100; method = 'exact';
+                } else if (p.folderNorm && R.startsWith(p.folderNorm) && R.length > p.folderNorm.length) {
+                    // Folder matches the facility; compare the leftover object suffix.
+                    const suffix = R.slice(p.folderNorm.length);
+                    if (p.fileNorm === suffix) {
+                        score = 95; method = 'exact';
+                    } else if (suffix.length >= 2 && p.fileNorm.includes(suffix)) {
+                        score = 80 - Math.min(20, p.fileNorm.length - suffix.length); method = 'contains';
+                    } else if (p.fileNorm.length >= 2 && suffix.includes(p.fileNorm)) {
+                        score = 62; method = 'contains';
+                    }
+                }
+                if (score === 0) {
+                    // Folder-agnostic fallbacks.
+                    if (p.fileNorm && p.fileNorm.includes(R) && R.length >= MIN) {
+                        score = 50; method = 'contains';
+                    } else if (R.length >= 5 && p.fileNorm.length >= 5 && R.includes(p.fileNorm)) {
+                        score = 40; method = 'contains';
+                    } else if (R.length >= 5 && p.pathNorm.includes(R)) {
+                        score = 30; method = 'path';
+                    }
+                }
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = { photo: p.photo, key: p.key, method };
+                    if (score >= 100) break;
                 }
             }
-            return null;
+            return best;
         }
 
         // Resolve (and cache) the photo match for a record by its index. Prefers an
