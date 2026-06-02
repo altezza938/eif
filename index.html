@@ -29,7 +29,7 @@
         <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-sm w-full p-8 shadow-2xl flex flex-col items-center text-center gap-4">
             <span class="text-4xl">🔒</span>
             <h2 class="text-lg font-bold text-white">Authorized Access Only</h2>
-            <p class="text-xs text-slate-400 leading-relaxed">This workspace and its data are restricted to authorized AECOM personnel. Access or use by unauthorized persons is prohibited. Enter the access passphrase to continue.</p>
+            <p class="text-xs text-slate-400 leading-relaxed">This workspace and its data are restricted to authorized personnel only. Access or use by unauthorized persons is strictly prohibited. Enter the access passphrase to continue.</p>
             <input type="password" id="gate-input" placeholder="Access passphrase" class="w-full bg-slate-950 border border-slate-700 px-4 py-2.5 rounded-lg text-sm text-white focus:outline-none focus:border-sky-500" onkeydown="if(event.key==='Enter')unlock()">
             <button onclick="unlock()" class="w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm py-2.5 rounded-lg transition">Enter</button>
             <p id="gate-error" class="text-rose-400 text-xs hidden">Incorrect passphrase.</p>
@@ -216,7 +216,7 @@
         // App version — bump this whenever index.html changes so you can confirm
         // the deployed/cached page matches the latest build (also logged to console).
         const APP_VERSION = "v1.3.4";
-        const APP_BUILD_DATE = "2026-06-02 19:08 UTC";
+        const APP_BUILD_DATE = "2026-06-03 03:14 HKT";
 
         // --- Access gate ---------------------------------------------------------
         // Client-side access lock. The passphrase is verified by deriving a salted
