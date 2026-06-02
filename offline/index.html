@@ -45,7 +45,7 @@
                     <span id="app-version" class="bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold"></span>
                 </h1>
                 <p class="text-xs text-slate-400 mt-1">GitHub Pages Edition • Fully client-side GIS & photo plate audit tool</p>
-                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.2.0.zip" download
+                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.3.0.zip" download
                    class="inline-flex items-center gap-1.5 mt-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-semibold px-3 py-1.5 rounded-lg transition">
                     ⬇️ Download offline version (.zip)
                 </a>
@@ -115,16 +115,30 @@
 
             <!-- Registry table board -->
             <div class="bg-slate-900/55 rounded-xl border border-slate-800 flex-1 flex flex-col overflow-hidden min-h-[400px]">
-                <div class="p-4 border-b border-slate-800 bg-slate-900/80 flex items-center justify-between gap-2 flex-wrap">
-                    <h3 class="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">
-                        🕵️ Audit Registry Records
-                        <span id="record-count" class="bg-slate-800 text-sky-400 px-2 py-0.5 rounded-full text-[10px] font-bold">0 / 0</span>
-                        <span id="flat-warning-badge" class="hidden bg-amber-500/10 text-amber-500 border border-amber-500/30 px-2.5 py-0.5 rounded-full text-[10px] font-bold">⚠️ Flat Photo Matching Mode</span>
-                    </h3>
-                    <div class="flex items-center gap-2">
-                        <input type="text" id="search-input" oninput="searchAndFilter()" placeholder="Search EIF No or Fac Type..." class="bg-slate-950 border border-slate-800 px-3 py-1 rounded text-xs text-white focus:outline-none focus:border-sky-500 w-48">
-                        <button onclick="runAutoAudit()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1 rounded transition font-bold">Audit Filtered</button>
-                        <button onclick="exportCSV()" class="bg-slate-700 hover:bg-slate-600 text-white text-xs px-3 py-1 rounded transition font-bold">Export CSV</button>
+                <div class="p-4 border-b border-slate-800 bg-slate-900/80 flex flex-col gap-3">
+                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                        <h3 class="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">
+                            🕵️ Audit Registry Records
+                            <span id="record-count" class="bg-slate-800 text-sky-400 px-2 py-0.5 rounded-full text-[10px] font-bold">0 / 0</span>
+                            <span id="matched-count" class="hidden bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full text-[10px] font-bold"></span>
+                            <span id="flat-warning-badge" class="hidden bg-amber-500/10 text-amber-500 border border-amber-500/30 px-2.5 py-0.5 rounded-full text-[10px] font-bold">⚠️ Flat Photo Matching Mode</span>
+                            <span id="audit-progress" class="hidden bg-sky-500/10 text-sky-300 border border-sky-500/30 px-2 py-0.5 rounded-full text-[10px] font-bold"></span>
+                        </h3>
+                        <button id="stop-audit-btn" onclick="stopAudit()" class="hidden bg-rose-600 hover:bg-rose-500 text-white text-xs px-3 py-1 rounded transition font-bold">■ Stop Verification</button>
+                    </div>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <input list="eif-list" type="text" id="search-input" oninput="searchAndFilter()" placeholder="Search / pick EIF No or Fac Type…" class="bg-slate-950 border border-slate-800 px-3 py-1 rounded text-xs text-white focus:outline-none focus:border-sky-500 w-56">
+                        <datalist id="eif-list"></datalist>
+                        <select id="factype-filter" onchange="searchAndFilter()" class="bg-slate-950 border border-slate-800 px-2 py-1 rounded text-xs text-white focus:outline-none focus:border-sky-500 max-w-[180px]">
+                            <option value="">All Facility Types</option>
+                        </select>
+                        <label class="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer select-none">
+                            <input type="checkbox" id="hide-unmatched" checked onchange="searchAndFilter()" class="accent-sky-500"> Hide unmatched
+                        </label>
+                        <button id="audit-filtered-btn" onclick="runAutoAudit()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1 rounded transition font-bold">Audit Filtered</button>
+                        <button onclick="showMatchDiagnostics()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs px-3 py-1 rounded transition font-bold">🔍 Match Check</button>
+                        <button onclick="exportExcel()" class="bg-slate-700 hover:bg-slate-600 text-white text-xs px-3 py-1 rounded transition font-bold">Export Excel</button>
+                        <button onclick="exportCSV()" class="bg-slate-700 hover:bg-slate-600 text-white text-xs px-3 py-1 rounded transition font-bold">Export CSV (ArcGIS)</button>
                     </div>
                 </div>
 
@@ -201,7 +215,7 @@
     <script>
         // App version — bump this whenever index.html changes so you can confirm
         // the deployed/cached page matches the latest build (also logged to console).
-        const APP_VERSION = "v1.2.0";
+        const APP_VERSION = "v1.3.0";
         const APP_BUILD_DATE = "2026-06-02";
 
         // --- Access gate ---------------------------------------------------------
@@ -239,6 +253,20 @@
         let filteredRecords = [];
         let auditResults = {};
         let selectedRecordIndex = null;
+
+        // Photo matching index + cache (rebuilt when photos change), and batch-audit
+        // control flags so a long run can be stopped without freezing the browser.
+        let photoIndex = [];          // [{ key, fileNorm, pathNorm, photo }]
+        let photoExact = new Map();   // fileNorm -> { photo, key }
+        let matchCache = {};          // record index -> { photo, key, method } | null
+        let auditRunning = false;
+        let auditAbort = false;
+
+        // HTML-escape helper for any place we build markup from data values.
+        function escapeHtml(s) {
+            return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+                ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
 
         function showAlert(title, description, icon = "ℹ️") {
             document.getElementById('modal-icon').innerText = icon;
@@ -330,31 +358,65 @@
             return (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
         }
 
-        // Match a photo to a record. If the record has a HYPERLINK path, use the original
-        // path-based resolver. Otherwise fall back to matching FAC_REF_NO against photo
-        // filenames (this dataset has no HYPERLINK column).
-        function resolvePhotoForRecord(rec) {
-            if (rec.HYPERLINK) {
-                const byLink = resolvePhoto(rec.HYPERLINK);
-                if (byLink) return byLink;
+        // Build a fast lookup index over the loaded photos. Called whenever the photo
+        // set changes. Pre-normalising once (instead of re-scanning every render) keeps
+        // the UI responsive even with thousands of records/photos.
+        function buildPhotoIndex() {
+            photoIndex = [];
+            photoExact = new Map();
+            matchCache = {};
+            for (const key of Object.keys(photosCache)) {
+                const pathNoExt = key.replace(/\.[^.]+$/, "");
+                const fileBase = pathNoExt.split('/').pop();
+                const fileNorm = normalizeRef(fileBase);
+                const pathNorm = normalizeRef(pathNoExt);
+                const entry = { key, fileNorm, pathNorm, photo: photosCache[key] };
+                photoIndex.push(entry);
+                if (fileNorm && !photoExact.has(fileNorm)) photoExact.set(fileNorm, { photo: entry.photo, key });
             }
-            return resolvePhotoByRef(rec.FAC_REF_NO);
         }
 
-        function resolvePhotoByRef(ref) {
+        // Match a normalised facility reference against the photo index, tiered from
+        // strict to loose so we maximise correct links without too many false hits:
+        //   1. exact filename match           (07sw-c_nh0011_o1_a == file)
+        //   2. filename contains / is contained by the ref (handles extra suffixes
+        //      like "_a"/"_O1" or a ref split across folder+file)
+        //   3. full path contains the ref     (ref spread across folder names)
+        // Returns { photo, key, method } or null.
+        function matchByRef(ref) {
             const norm = normalizeRef(ref);
-            if (!norm) return null;
-            for (let key of Object.keys(photosCache)) {
-                // Normalise the WHOLE relative path (folders + filename, minus extension).
-                // This matches whether the full ref is in the filename
-                // (07SW-C_NH0011_O1_a.jpg) or split across folder + file
-                // (07SW-C_NH0011_O1/a.jpg) — both normalise to ...o1a.
-                const pathNoExt = key.replace(/\.[^.]+$/, "");
-                if (normalizeRef(pathNoExt).includes(norm)) {
-                    return photosCache[key];
+            if (!norm || photoIndex.length === 0) return null;
+
+            const ex = photoExact.get(norm);
+            if (ex) return { photo: ex.photo, key: ex.key, method: 'exact' };
+
+            const MIN = 5; // avoid trivial substring hits on very short refs
+            for (const p of photoIndex) {
+                if (p.fileNorm && p.fileNorm.includes(norm)) return { photo: p.photo, key: p.key, method: 'contains' };
+                if (norm.length >= MIN && p.fileNorm.length >= MIN && norm.includes(p.fileNorm))
+                    return { photo: p.photo, key: p.key, method: 'contains' };
+            }
+            if (norm.length >= MIN) {
+                for (const p of photoIndex) {
+                    if (p.pathNorm.includes(norm)) return { photo: p.photo, key: p.key, method: 'path' };
                 }
             }
             return null;
+        }
+
+        // Resolve (and cache) the photo match for a record by its index. Prefers an
+        // explicit HYPERLINK path if present, otherwise matches by FAC_REF_NO / EIF id.
+        function resolveMatch(idx) {
+            if (idx in matchCache) return matchCache[idx];
+            const rec = dbfData.records[idx];
+            let res = null;
+            if (rec.HYPERLINK) {
+                const byLink = resolvePhoto(rec.HYPERLINK);
+                if (byLink) res = { photo: byLink, key: (rec.HYPERLINK.split(/[\\/]/).pop() || ''), method: 'hyperlink' };
+            }
+            if (!res) res = matchByRef(rec.FAC_REF_NO || rec.EIF_NO || rec.EIF_ID);
+            matchCache[idx] = res;
+            return res;
         }
 
         function searchAndFilter() {
@@ -441,8 +503,10 @@
 
                 const dbfBuffer = await dbfFile.async("arraybuffer");
                 dbfData = parseDBF(dbfBuffer);
+                matchCache = {};
 
                 document.getElementById('shp-status').innerText = dbfFile.name.split('/').pop() + " parsed successfully!";
+                populateFilters();
                 buildRegistryTable();
             } catch (err) {
                 document.getElementById('shp-status').innerText = "Error parsing file.";
@@ -474,6 +538,7 @@
                 }
 
                 document.getElementById('folder-status').innerText = "Indexed " + count + " photos!";
+                buildPhotoIndex();
                 buildRegistryTable();
                 showAlert("Folder Indexed", "Successfully mapped <b>" + count + "</b> localized site photos. No files were uploaded; processing runs completely inside your browser sandbox memory space.", "🟢");
             } catch (err) {
@@ -506,6 +571,7 @@
                 }
 
                 document.getElementById('photos-status').innerText = "Cached " + count + " zipped photos successfully!";
+                buildPhotoIndex();
                 buildRegistryTable();
                 showAlert("ZIP Indexed", "Successfully indexed <b>" + count + "</b> zipped files. Individual photo files are parsed on-the-fly during validation to prevent performance drops.", "🟢");
             } catch (err) {
@@ -567,18 +633,34 @@
             tbody.innerHTML = "";
 
             const term = document.getElementById('search-input').value.trim().toLowerCase();
+            const typeFilter = document.getElementById('factype-filter').value;
+            const photosLoaded = photoIndex.length > 0;
+            // Only honour "Hide unmatched" once photos are loaded — otherwise everything
+            // is unmatched and the table would look empty.
+            const hideUnmatched = document.getElementById('hide-unmatched').checked && photosLoaded;
             const records = dbfData.records;
 
             filteredRecords = [];
+            let matchedShown = 0;
             records.forEach((rec, idx) => {
                 const eif = getRecordId(rec, idx).toLowerCase();
-                const facType = (rec.FAC_TYPE || "Unknown").toLowerCase();
-                if (term === "" || eif.includes(term) || facType.includes(term)) {
-                    filteredRecords.push({ record: rec, originalIndex: idx });
-                }
+                const facType = rec.FAC_TYPE || "Unknown";
+                if (typeFilter && facType !== typeFilter) return;
+                if (term !== "" && !eif.includes(term) && !facType.toLowerCase().includes(term)) return;
+                const matched = photosLoaded && !!(resolveMatch(idx) && resolveMatch(idx).photo);
+                if (hideUnmatched && !matched) return;
+                if (matched) matchedShown++;
+                filteredRecords.push({ record: rec, originalIndex: idx });
             });
 
             document.getElementById('record-count').innerText = filteredRecords.length + " / " + records.length;
+            const matchedBadge = document.getElementById('matched-count');
+            if (photosLoaded) {
+                matchedBadge.classList.remove('hidden');
+                matchedBadge.innerText = "📷 " + matchedShown + " matched" + (hideUnmatched ? " (unmatched hidden)" : "");
+            } else {
+                matchedBadge.classList.add('hidden');
+            }
 
             const warningBadge = document.getElementById('flat-warning-badge');
             if (Object.keys(photosCache).length > 0 && !hasFolderStructure) {
@@ -591,13 +673,16 @@
             const renderList = filteredRecords.slice(0, limit);
 
             if (renderList.length === 0) {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="5" class="p-8 text-center text-slate-500 italic">
-                            No matching GIS records found.
-                        </td>
-                    </tr>
-                `;
+                const emptyMsg = (document.getElementById('hide-unmatched').checked && photoIndex.length > 0)
+                    ? `No photo-matched records for this filter. Untick "Hide unmatched" to see all, or use 🔍 Match Check.`
+                    : `No matching GIS records found.`;
+                const tr = document.createElement('tr');
+                const td = document.createElement('td');
+                td.colSpan = 5;
+                td.className = "p-8 text-center text-slate-500 italic";
+                td.textContent = emptyMsg;
+                tr.appendChild(td);
+                tbody.appendChild(tr);
                 return;
             }
 
@@ -607,7 +692,7 @@
                 const eif = getRecordId(rec, idx);
                 const facType = rec.FAC_TYPE || "Unknown";
 
-                const isFound = resolvePhotoForRecord(rec) ? true : false;
+                const isFound = !!(resolveMatch(idx) && resolveMatch(idx).photo);
                 const statusColor = isFound ? "text-emerald-400" : "text-amber-500";
                 const statusText = isFound ? "Photo Found" : "Photo Missing";
 
@@ -729,7 +814,8 @@
             const facType = record.FAC_TYPE || "Unknown";
             const hyperlink = record.HYPERLINK || "";
 
-            const photoObj = resolvePhotoForRecord(record);
+            const match = resolveMatch(idx);
+            const photoObj = match && match.photo;
 
             document.getElementById('inspector-placeholder').classList.add('hidden');
             const workspace = document.getElementById('inspector-workspace');
@@ -743,8 +829,9 @@
             }
 
             if (photoObj) {
-                badge.innerText = "LINK MATCH";
-                badge.className = "absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500 text-slate-950";
+                const methodLabel = { exact: "EXACT MATCH", contains: "FUZZY MATCH", path: "PATH MATCH", hyperlink: "LINK MATCH" }[match.method] || "MATCH";
+                badge.innerText = methodLabel;
+                badge.className = "absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold " + (match.method === 'exact' || match.method === 'hyperlink' ? "bg-emerald-500 text-slate-950" : "bg-amber-400 text-slate-950");
 
                 if (photoObj.type === 'file') {
                     imgElement.src = URL.createObjectURL(photoObj.data);
@@ -808,10 +895,11 @@
             const record = dbfData.records[idx];
             if (!record) return;
             const eif = getRecordId(record, idx);
-            const photoObj = resolvePhotoForRecord(record);
+            const match = resolveMatch(idx);
+            const photoObj = match && match.photo;
             if (!photoObj) return;
 
-            showAlert("Processing Single Row", "Extracting and validating EIF record: <b>" + eif + "</b>...", "🤖");
+            showAlert("Processing Single Row", "Extracting and validating EIF record: <b>" + escapeHtml(eif) + "</b>...", "🤖");
             getBase64OfPhoto(photoObj).then(base64Img => {
                 runAudit(eif, record.FAC_TYPE, base64Img, getPhotoMime(photoObj));
             }).catch(err => {
@@ -913,28 +1001,74 @@
             };
         }
 
+        // Stop an in-progress batch verification. The loop checks auditAbort between
+        // items, so a long run can be halted without freezing or killing the browser.
+        function stopAudit() {
+            auditAbort = true;
+            const b = document.getElementById('stop-audit-btn');
+            if (b) b.innerText = "Stopping…";
+        }
+
+        function setBatchUI(running) {
+            const stopBtn = document.getElementById('stop-audit-btn');
+            const auditBtn = document.getElementById('audit-filtered-btn');
+            const progress = document.getElementById('audit-progress');
+            stopBtn.classList.toggle('hidden', !running);
+            if (running) stopBtn.innerText = "■ Stop Verification";
+            auditBtn.disabled = running;
+            auditBtn.classList.toggle('opacity-50', running);
+            auditBtn.classList.toggle('cursor-not-allowed', running);
+            if (!running) progress.classList.add('hidden');
+        }
+
         async function runAutoAudit() {
-            if (!dbfData || filteredRecords.length === 0) return;
-            let successCount = 0;
+            if (!dbfData || filteredRecords.length === 0 || auditRunning) return;
 
-            showAlert("Batch Audit Started", "Starting batch QA audit for <b>" + filteredRecords.length + "</b> filtered records...", "🤖");
-
-            for (let item of filteredRecords) {
-                const rec = item.record;
-                const eif = getRecordId(rec, item.originalIndex);
-                const photoObj = resolvePhotoForRecord(rec);
-                if (photoObj && !auditResults[eif]) {
-                    try {
-                        const base64Data = await getBase64OfPhoto(photoObj);
-                        await runAudit(eif, rec.FAC_TYPE, base64Data, getPhotoMime(photoObj));
-                        successCount++;
-                    } catch (e) {
-                        console.error(e);
-                        break;
-                    }
-                }
+            // Only audit currently-filtered records that have a photo and aren't done yet.
+            const targets = filteredRecords.filter(item => {
+                const m = resolveMatch(item.originalIndex);
+                const eif = getRecordId(item.record, item.originalIndex);
+                return m && m.photo && !auditResults[eif];
+            });
+            if (targets.length === 0) {
+                showAlert("Nothing to Audit", "All filtered records with photos are already verified (or none have a matched photo).", "🟡");
+                return;
             }
-            showAlert("Batch Audit Complete", "Successfully completed visual inspections for " + successCount + " assets.", "🎉");
+
+            auditRunning = true;
+            auditAbort = false;
+            setBatchUI(true);
+            const progress = document.getElementById('audit-progress');
+            progress.classList.remove('hidden');
+
+            let successCount = 0;
+            let i = 0;
+            for (; i < targets.length; i++) {
+                if (auditAbort) break;
+                const item = targets[i];
+                const idx = item.originalIndex;
+                const eif = getRecordId(item.record, idx);
+                const m = resolveMatch(idx);
+                progress.innerText = "Auditing " + (i + 1) + " / " + targets.length + "…";
+                try {
+                    const base64Data = await getBase64OfPhoto(m.photo);
+                    await runAudit(eif, item.record.FAC_TYPE, base64Data, getPhotoMime(m.photo));
+                    successCount++;
+                } catch (e) {
+                    console.error(e);
+                }
+                // Yield to the event loop so the Stop button stays responsive and the
+                // tab never appears "not responding"; also throttles request rate.
+                await new Promise(r => setTimeout(r, 120));
+            }
+
+            auditRunning = false;
+            setBatchUI(false);
+            showAlert(
+                auditAbort ? "Verification Stopped" : "Batch Audit Complete",
+                "Verified <b>" + successCount + "</b> of " + targets.length + " records" + (auditAbort ? " before stopping." : "."),
+                auditAbort ? "🛑" : "🎉"
+            );
         }
 
         // --- CSV export ----------------------------------------------------------
@@ -946,42 +1080,148 @@
             return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
         }
 
+        function timestamp() {
+            return new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+        }
+
+        function downloadBlob(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // Gather one export row per filtered record. Uses short, ArcGIS-safe field
+        // names (FAC_REF_NO is the join key back to your GIS layer).
+        function buildExportRows() {
+            return filteredRecords.map(item => {
+                const rec = item.record;
+                const idx = item.originalIndex;
+                const eif = getRecordId(rec, idx);
+                const m = resolveMatch(idx);
+                const audit = auditResults[eif] || {};
+                return {
+                    FAC_REF_NO: eif,
+                    FAC_TYPE: rec.FAC_TYPE || "Unknown",
+                    PHOTO_FND: (m && m.photo) ? "Y" : "N",
+                    PHOTO_FILE: (m && m.key) ? m.key.split('/').pop() : "",
+                    MATCH_MTHD: (m && m.method) ? m.method : "",
+                    AI_VERDICT: audit.verdict || "",
+                    AI_CONF: audit.confidence || "",
+                    AI_REASON: audit.reason || ""
+                };
+            });
+        }
+
+        // CSV with ArcGIS-friendly headers. A CSV can be added to ArcGIS Pro / ArcMap
+        // and joined to the facility layer on FAC_REF_NO to push the verdicts back in.
         function exportCSV() {
             if (!dbfData || filteredRecords.length === 0) {
                 showAlert("Nothing to Export", "Load a shapefile first, then export the registry.", "🟡");
                 return;
             }
-
-            const headers = ["FAC_REF_NO", "FAC_TYPE", "Photo Status", "AI Verdict", "Confidence", "Reason"];
+            const data = buildExportRows();
+            const headers = Object.keys(data[0]);
             const rows = [headers.join(",")];
-
-            filteredRecords.forEach(item => {
-                const rec = item.record;
-                const eif = getRecordId(rec, item.originalIndex);
-                const facType = rec.FAC_TYPE || "Unknown";
-                const photoStatus = resolvePhotoForRecord(rec) ? "Photo Found" : "Photo Missing";
-                const audit = auditResults[eif] || {};
-                rows.push([
-                    csvCell(eif),
-                    csvCell(facType),
-                    csvCell(photoStatus),
-                    csvCell(audit.verdict || ""),
-                    csvCell(audit.confidence || ""),
-                    csvCell(audit.reason || "")
-                ].join(","));
-            });
-
-            // Prepend a UTF-8 BOM so Excel reads non-ASCII characters correctly.
+            data.forEach(r => rows.push(headers.map(h => csvCell(r[h])).join(",")));
+            // UTF-8 BOM so Excel/ArcGIS read non-ASCII characters correctly.
             const blob = new Blob(["﻿" + rows.join("\r\n")], { type: "text/csv;charset=utf-8;" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-            a.href = url;
-            a.download = "eif_audit_" + stamp + ".csv";
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            downloadBlob(blob, "eif_audit_" + timestamp() + ".csv");
+        }
+
+        // Excel export via an HTML-table .xls workbook (opens directly in Excel; no
+        // external library needed).
+        function exportExcel() {
+            if (!dbfData || filteredRecords.length === 0) {
+                showAlert("Nothing to Export", "Load a shapefile first, then export the registry.", "🟡");
+                return;
+            }
+            const data = buildExportRows();
+            const headers = Object.keys(data[0]);
+            let table = '<table border="1"><thead><tr>' +
+                headers.map(h => '<th>' + escapeHtml(h) + '</th>').join('') + '</tr></thead><tbody>';
+            data.forEach(r => {
+                table += '<tr>' + headers.map(h => '<td>' + escapeHtml(r[h]) + '</td>').join('') + '</tr>';
+            });
+            table += '</tbody></table>';
+            const doc = '<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8">' +
+                '<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>' +
+                '<x:Name>EIF Audit</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>' +
+                '</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body>' +
+                table + '</body></html>';
+            const blob = new Blob(["﻿" + doc], { type: "application/vnd.ms-excel" });
+            downloadBlob(blob, "eif_audit_" + timestamp() + ".xls");
+        }
+
+        // Populate the EIF search dropdown (datalist) and the facility-type filter from
+        // the loaded shapefile, so users can pick rather than type.
+        function populateFilters() {
+            if (!dbfData) return;
+            const list = document.getElementById('eif-list');
+            const typeSel = document.getElementById('factype-filter');
+            const ids = [];
+            const types = new Set();
+            dbfData.records.forEach((rec, idx) => {
+                ids.push(getRecordId(rec, idx));
+                types.add(rec.FAC_TYPE || "Unknown");
+            });
+            // Datalist: cap to keep the dropdown snappy on very large datasets.
+            const seen = new Set();
+            list.innerHTML = "";
+            for (const id of ids) {
+                if (seen.has(id)) continue;
+                seen.add(id);
+                const opt = document.createElement('option');
+                opt.value = id;
+                list.appendChild(opt);
+                if (seen.size >= 2000) break;
+            }
+            const current = typeSel.value;
+            typeSel.innerHTML = '<option value="">All Facility Types</option>';
+            Array.from(types).sort().forEach(t => {
+                const opt = document.createElement('option');
+                opt.value = t;
+                opt.textContent = t;
+                typeSel.appendChild(opt);
+            });
+            if (current) typeSel.value = current;
+        }
+
+        // Quick report on how many records matched a photo, with a few sample
+        // unmatched references and photo filenames so naming mismatches are easy to spot.
+        function showMatchDiagnostics() {
+            if (!dbfData) { showAlert("No Data", "Load a GIS shapefile ZIP first.", "🟡"); return; }
+            if (photoIndex.length === 0) { showAlert("No Photos", "Load a photo folder or ZIP first.", "🟡"); return; }
+
+            let matched = 0;
+            const unmatched = [];
+            const byMethod = { exact: 0, contains: 0, path: 0, hyperlink: 0 };
+            dbfData.records.forEach((rec, idx) => {
+                const m = resolveMatch(idx);
+                if (m && m.photo) { matched++; if (byMethod[m.method] !== undefined) byMethod[m.method]++; }
+                else if (unmatched.length < 12) unmatched.push(rec.FAC_REF_NO || getRecordId(rec, idx));
+            });
+            const total = dbfData.records.length;
+            const pct = total ? Math.round(matched / total * 100) : 0;
+            const sampleUnmatched = unmatched.length
+                ? unmatched.map(escapeHtml).join("<br>") : "(none — all records matched)";
+            const samplePhotos = photoIndex.slice(0, 12)
+                .map(p => escapeHtml(p.key.split('/').pop())).join("<br>");
+
+            showAlert("Match Diagnostics",
+                "<b>" + matched + "</b> / " + total + " records matched a photo (<b>" + pct + "%</b>).<br>" +
+                "Photos indexed: <b>" + photoIndex.length + "</b>.<br>" +
+                "By method — exact: " + byMethod.exact + ", fuzzy: " + byMethod.contains +
+                ", path: " + byMethod.path + ", link: " + byMethod.hyperlink + ".<br><br>" +
+                '<div class="text-left"><b>Sample UNMATCHED references:</b><br>' +
+                '<span class="font-mono text-[10px] text-amber-300">' + sampleUnmatched + '</span><br><br>' +
+                '<b>Sample photo filenames:</b><br>' +
+                '<span class="font-mono text-[10px] text-sky-300">' + samplePhotos + '</span></div>',
+                "🔍");
         }
     </script>
 </body>
