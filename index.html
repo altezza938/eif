@@ -59,7 +59,7 @@
                     <span id="app-version" class="bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold"></span>
                 </h1>
                 <p class="text-xs text-slate-400 mt-1">GitHub Pages Edition • Fully client-side GIS & photo plate audit tool</p>
-                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.4.0.zip" download
+                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.4.1.zip" download
                    class="inline-flex items-center gap-1.5 mt-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-semibold px-3 py-1.5 rounded-lg transition">
                     ⬇️ Download offline version (.zip)
                 </a>
@@ -141,6 +141,9 @@
                         <button id="stop-audit-btn" onclick="stopAudit()" class="hidden bg-rose-600 hover:bg-rose-500 text-white text-xs px-3 py-1 rounded transition font-bold">■ Stop Verification</button>
                     </div>
                     <div class="flex items-center gap-2 flex-wrap">
+                        <select id="mapsheet-filter" onchange="onMapsheetChange()" class="bg-slate-950 border border-slate-800 px-2 py-1 rounded text-xs text-sky-300 font-semibold focus:outline-none focus:border-sky-500 max-w-[160px]">
+                            <option value="">All Mapsheets</option>
+                        </select>
                         <input list="eif-list" type="text" id="search-input" oninput="searchAndFilter()" placeholder="Search / pick EIF No or Fac Type…" class="bg-slate-950 border border-slate-800 px-3 py-1 rounded text-xs text-white focus:outline-none focus:border-sky-500 w-56">
                         <datalist id="eif-list"></datalist>
                         <select id="factype-filter" onchange="searchAndFilter()" class="bg-slate-950 border border-slate-800 px-2 py-1 rounded text-xs text-white focus:outline-none focus:border-sky-500 max-w-[180px]">
@@ -229,8 +232,8 @@
     <script>
         // App version — bump this whenever index.html changes so you can confirm
         // the deployed/cached page matches the latest build (also logged to console).
-        const APP_VERSION = "v1.4.0";
-        const APP_BUILD_DATE = "2026-06-03 03:20 HKT";
+        const APP_VERSION = "v1.4.1";
+        const APP_BUILD_DATE = "2026-06-03 03:27 HKT";
 
         // --- Access gate ---------------------------------------------------------
         // Client-side access lock. The passphrase is verified by deriving a salted
@@ -795,6 +798,7 @@
 
             const term = document.getElementById('search-input').value.trim().toLowerCase();
             const typeFilter = document.getElementById('factype-filter').value;
+            const mapsheetFilter = document.getElementById('mapsheet-filter').value;
             const photosLoaded = photoIndex.length > 0;
             // Only honour "Hide unmatched" once photos are loaded — otherwise everything
             // is unmatched and the table would look empty.
@@ -806,6 +810,7 @@
             records.forEach((rec, idx) => {
                 const eif = getRecordId(rec, idx).toLowerCase();
                 const facType = rec.FAC_TYPE || "Unknown";
+                if (mapsheetFilter && getMapsheet(rec, idx) !== mapsheetFilter) return;
                 if (typeFilter && facType !== typeFilter) return;
                 if (term !== "" && !eif.includes(term) && !facType.toLowerCase().includes(term)) return;
                 const matched = photosLoaded && !!(resolveMatch(idx) && resolveMatch(idx).photo);
@@ -1332,36 +1337,69 @@
 
         // Populate the EIF search dropdown (datalist) and the facility-type filter from
         // the loaded shapefile, so users can pick rather than type.
+        // The mapsheet number is the prefix of FAC_REF_NO before the facility code,
+        // e.g. "07SW-C/NH0011_O1_a" -> "07SW-C".
+        function getMapsheet(rec, idx) {
+            const ref = getRecordId(rec, idx);
+            const m = ref.match(/^(.*?)[\/_]?NH\d+/i);
+            return m ? m[1].replace(/[\/_]+$/, '') : (ref.split(/[\/_]/)[0] || '');
+        }
+
         function populateFilters() {
             if (!dbfData) return;
+            // Mapsheet dropdown — the primary filter the user picks first.
+            const sheetSel = document.getElementById('mapsheet-filter');
+            const sheets = new Set();
+            dbfData.records.forEach((rec, idx) => { const s = getMapsheet(rec, idx); if (s) sheets.add(s); });
+            const curSheet = sheetSel.value;
+            sheetSel.innerHTML = '<option value="">All Mapsheets</option>';
+            Array.from(sheets).sort().forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s; opt.textContent = s;
+                sheetSel.appendChild(opt);
+            });
+            if (curSheet && sheets.has(curSheet)) sheetSel.value = curSheet;
+            // EIF list + facility-type options cascade from the selected mapsheet.
+            refreshDependentFilters();
+        }
+
+        // Rebuild the EIF datalist and Facility Type dropdown limited to the currently
+        // selected mapsheet, so "choose mapsheet first" narrows the later choices.
+        function refreshDependentFilters() {
+            if (!dbfData) return;
+            const sheet = document.getElementById('mapsheet-filter').value;
             const list = document.getElementById('eif-list');
             const typeSel = document.getElementById('factype-filter');
-            const ids = [];
+            const seen = new Set();
             const types = new Set();
+            list.innerHTML = "";
             dbfData.records.forEach((rec, idx) => {
-                ids.push(getRecordId(rec, idx));
+                if (sheet && getMapsheet(rec, idx) !== sheet) return;
+                const id = getRecordId(rec, idx);
+                if (!seen.has(id)) {
+                    seen.add(id);
+                    if (seen.size <= 2000) {
+                        const opt = document.createElement('option');
+                        opt.value = id;
+                        list.appendChild(opt);
+                    }
+                }
                 types.add(rec.FAC_TYPE || "Unknown");
             });
-            // Datalist: cap to keep the dropdown snappy on very large datasets.
-            const seen = new Set();
-            list.innerHTML = "";
-            for (const id of ids) {
-                if (seen.has(id)) continue;
-                seen.add(id);
-                const opt = document.createElement('option');
-                opt.value = id;
-                list.appendChild(opt);
-                if (seen.size >= 2000) break;
-            }
-            const current = typeSel.value;
+            const curType = typeSel.value;
             typeSel.innerHTML = '<option value="">All Facility Types</option>';
             Array.from(types).sort().forEach(t => {
                 const opt = document.createElement('option');
-                opt.value = t;
-                opt.textContent = t;
+                opt.value = t; opt.textContent = t;
                 typeSel.appendChild(opt);
             });
-            if (current) typeSel.value = current;
+            typeSel.value = (curType && types.has(curType)) ? curType : "";
+        }
+
+        // Picking a mapsheet narrows the dependent dropdowns, then re-renders the table.
+        function onMapsheetChange() {
+            refreshDependentFilters();
+            buildRegistryTable();
         }
 
         // Quick report on how many records matched a photo, with a few sample
