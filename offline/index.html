@@ -59,7 +59,7 @@
                     <span id="app-version" class="bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold"></span>
                 </h1>
                 <p class="text-xs text-slate-400 mt-1">GitHub Pages Edition • Fully client-side GIS & photo plate audit tool</p>
-                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.4.0.zip" download
+                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.4.1.zip" download
                    class="inline-flex items-center gap-1.5 mt-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-semibold px-3 py-1.5 rounded-lg transition">
                     ⬇️ Download offline version (.zip)
                 </a>
@@ -141,6 +141,9 @@
                         <button id="stop-audit-btn" onclick="stopAudit()" class="hidden bg-rose-600 hover:bg-rose-500 text-white text-xs px-3 py-1 rounded transition font-bold">■ Stop Verification</button>
                     </div>
                     <div class="flex items-center gap-2 flex-wrap">
+                        <select id="mapsheet-filter" onchange="onMapsheetChange()" class="bg-slate-950 border border-slate-800 px-2 py-1 rounded text-xs text-sky-300 font-semibold focus:outline-none focus:border-sky-500 max-w-[160px]">
+                            <option value="">All Mapsheets</option>
+                        </select>
                         <input list="eif-list" type="text" id="search-input" oninput="searchAndFilter()" placeholder="Search / pick EIF No or Fac Type…" class="bg-slate-950 border border-slate-800 px-3 py-1 rounded text-xs text-white focus:outline-none focus:border-sky-500 w-56">
                         <datalist id="eif-list"></datalist>
                         <select id="factype-filter" onchange="searchAndFilter()" class="bg-slate-950 border border-slate-800 px-2 py-1 rounded text-xs text-white focus:outline-none focus:border-sky-500 max-w-[180px]">
@@ -229,8 +232,8 @@
     <script>
         // App version — bump this whenever index.html changes so you can confirm
         // the deployed/cached page matches the latest build (also logged to console).
-        const APP_VERSION = "v1.4.0";
-        const APP_BUILD_DATE = "2026-06-03 03:20 HKT";
+        const APP_VERSION = "v1.4.1";
+        const APP_BUILD_DATE = "2026-06-03 03:31 HKT";
 
         // --- Access gate ---------------------------------------------------------
         // Client-side access lock. The passphrase is verified by deriving a salted
@@ -511,13 +514,17 @@
             }
         }
 
-        // Match a normalised facility reference against the photo index using a scored,
-        // folder-anchored strategy. Photos are organised one folder per facility
-        // (e.g. "07SW-C_NH0006/"), and a record ref is facility + object suffix
-        // (e.g. "07SW-C/NH0006_C1_c" -> "07swcnh0006" + "c1c"). We therefore anchor on
-        // the folder, then match the remaining suffix against the filename. This is far
-        // more robust than a plain contiguous-substring test (which broke whenever a
-        // filename carried any extra text before/after the object code).
+        // Match a record reference to a photo using a scored strategy built around the
+        // photo FOLDER name, which stores the EIF facility number.
+        //
+        // A record ref = facility (region + NHxxxx) + object code, e.g.
+        // "07SW-C/NH0006_C1_c" -> facility "07swcnh0006", object "c1c".
+        // Photos are filed one folder per facility, e.g. "07SW-C_NH0006/..." (possibly
+        // nested under a parent folder). We detect the facility folder by containment
+        // (robust to parent folders), then:
+        //   - if the filename encodes the object code, link to that specific photo;
+        //   - otherwise fall back to a FACILITY-level link (any photo in that folder),
+        //     so records are still related to their facility via the folder name.
         // Returns { photo, key, method } picking the single best candidate.
         function matchByRef(ref) {
             const R = normalizeRef(ref);
@@ -527,6 +534,18 @@
             const ex = photoExact.get(R);
             if (ex) return { photo: ex.photo, key: ex.key, method: 'exact' };
 
+            // Split the ref into facility (folder is named after this) and object parts.
+            const facM = (ref || "").match(/^(.*?NH\d+)/i);
+            const facilityNorm = facM ? normalizeRef(facM[1]) : "";
+            const objM = (ref || "").match(/NH\d+[\s\/_\-]*(.*)$/i);
+            const objNorm = objM ? normalizeRef(objM[1]) : "";
+
+            // Does a photo's folder path correspond to this record's facility?
+            // Handles both "07SW-C_NH0006/" and nested "Photos/07SW-C_NH0006/", plus a
+            // folder named by the bare facility code (e.g. "NH0006").
+            const folderHasFacility = (fn) => !!facilityNorm && !!fn &&
+                (fn.includes(facilityNorm) || (fn.length >= 6 && facilityNorm.includes(fn)));
+
             const MIN = 4;
             let best = null, bestScore = 0;
             for (const p of photoIndex) {
@@ -534,15 +553,16 @@
 
                 if (p.fileNorm === R || p.pathNorm === R) {
                     score = 100; method = 'exact';
-                } else if (p.folderNorm && R.startsWith(p.folderNorm) && R.length > p.folderNorm.length) {
-                    // Folder matches the facility; compare the leftover object suffix.
-                    const suffix = R.slice(p.folderNorm.length);
-                    if (p.fileNorm === suffix) {
+                } else if (folderHasFacility(p.folderNorm)) {
+                    // Photo is in this facility's folder.
+                    if (objNorm && p.fileNorm === objNorm) {
                         score = 95; method = 'exact';
-                    } else if (suffix.length >= 2 && p.fileNorm.includes(suffix)) {
-                        score = 80 - Math.min(20, p.fileNorm.length - suffix.length); method = 'contains';
-                    } else if (p.fileNorm.length >= 2 && suffix.includes(p.fileNorm)) {
+                    } else if (objNorm && objNorm.length >= 2 && p.fileNorm.includes(objNorm)) {
+                        score = 80 - Math.min(20, p.fileNorm.length - objNorm.length); method = 'contains';
+                    } else if (objNorm && p.fileNorm.length >= 2 && objNorm.includes(p.fileNorm)) {
                         score = 62; method = 'contains';
+                    } else {
+                        score = 25; method = 'folder'; // facility-level link via folder name
                     }
                 }
                 if (score === 0) {
@@ -795,6 +815,7 @@
 
             const term = document.getElementById('search-input').value.trim().toLowerCase();
             const typeFilter = document.getElementById('factype-filter').value;
+            const mapsheetFilter = document.getElementById('mapsheet-filter').value;
             const photosLoaded = photoIndex.length > 0;
             // Only honour "Hide unmatched" once photos are loaded — otherwise everything
             // is unmatched and the table would look empty.
@@ -806,6 +827,7 @@
             records.forEach((rec, idx) => {
                 const eif = getRecordId(rec, idx).toLowerCase();
                 const facType = rec.FAC_TYPE || "Unknown";
+                if (mapsheetFilter && getMapsheet(rec, idx) !== mapsheetFilter) return;
                 if (typeFilter && facType !== typeFilter) return;
                 if (term !== "" && !eif.includes(term) && !facType.toLowerCase().includes(term)) return;
                 const matched = photosLoaded && !!(resolveMatch(idx) && resolveMatch(idx).photo);
@@ -990,7 +1012,7 @@
             }
 
             if (photoObj) {
-                const methodLabel = { exact: "EXACT MATCH", contains: "FUZZY MATCH", path: "PATH MATCH", hyperlink: "LINK MATCH" }[match.method] || "MATCH";
+                const methodLabel = { exact: "EXACT MATCH", contains: "FUZZY MATCH", path: "PATH MATCH", hyperlink: "LINK MATCH", folder: "FACILITY MATCH" }[match.method] || "MATCH";
                 badge.innerText = methodLabel;
                 badge.className = "absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold " + (match.method === 'exact' || match.method === 'hyperlink' ? "bg-emerald-500 text-slate-950" : "bg-amber-400 text-slate-950");
 
@@ -1332,36 +1354,69 @@
 
         // Populate the EIF search dropdown (datalist) and the facility-type filter from
         // the loaded shapefile, so users can pick rather than type.
+        // The mapsheet number is the prefix of FAC_REF_NO before the facility code,
+        // e.g. "07SW-C/NH0011_O1_a" -> "07SW-C".
+        function getMapsheet(rec, idx) {
+            const ref = getRecordId(rec, idx);
+            const m = ref.match(/^(.*?)[\/_]?NH\d+/i);
+            return m ? m[1].replace(/[\/_]+$/, '') : (ref.split(/[\/_]/)[0] || '');
+        }
+
         function populateFilters() {
             if (!dbfData) return;
+            // Mapsheet dropdown — the primary filter the user picks first.
+            const sheetSel = document.getElementById('mapsheet-filter');
+            const sheets = new Set();
+            dbfData.records.forEach((rec, idx) => { const s = getMapsheet(rec, idx); if (s) sheets.add(s); });
+            const curSheet = sheetSel.value;
+            sheetSel.innerHTML = '<option value="">All Mapsheets</option>';
+            Array.from(sheets).sort().forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s; opt.textContent = s;
+                sheetSel.appendChild(opt);
+            });
+            if (curSheet && sheets.has(curSheet)) sheetSel.value = curSheet;
+            // EIF list + facility-type options cascade from the selected mapsheet.
+            refreshDependentFilters();
+        }
+
+        // Rebuild the EIF datalist and Facility Type dropdown limited to the currently
+        // selected mapsheet, so "choose mapsheet first" narrows the later choices.
+        function refreshDependentFilters() {
+            if (!dbfData) return;
+            const sheet = document.getElementById('mapsheet-filter').value;
             const list = document.getElementById('eif-list');
             const typeSel = document.getElementById('factype-filter');
-            const ids = [];
+            const seen = new Set();
             const types = new Set();
+            list.innerHTML = "";
             dbfData.records.forEach((rec, idx) => {
-                ids.push(getRecordId(rec, idx));
+                if (sheet && getMapsheet(rec, idx) !== sheet) return;
+                const id = getRecordId(rec, idx);
+                if (!seen.has(id)) {
+                    seen.add(id);
+                    if (seen.size <= 2000) {
+                        const opt = document.createElement('option');
+                        opt.value = id;
+                        list.appendChild(opt);
+                    }
+                }
                 types.add(rec.FAC_TYPE || "Unknown");
             });
-            // Datalist: cap to keep the dropdown snappy on very large datasets.
-            const seen = new Set();
-            list.innerHTML = "";
-            for (const id of ids) {
-                if (seen.has(id)) continue;
-                seen.add(id);
-                const opt = document.createElement('option');
-                opt.value = id;
-                list.appendChild(opt);
-                if (seen.size >= 2000) break;
-            }
-            const current = typeSel.value;
+            const curType = typeSel.value;
             typeSel.innerHTML = '<option value="">All Facility Types</option>';
             Array.from(types).sort().forEach(t => {
                 const opt = document.createElement('option');
-                opt.value = t;
-                opt.textContent = t;
+                opt.value = t; opt.textContent = t;
                 typeSel.appendChild(opt);
             });
-            if (current) typeSel.value = current;
+            typeSel.value = (curType && types.has(curType)) ? curType : "";
+        }
+
+        // Picking a mapsheet narrows the dependent dropdowns, then re-renders the table.
+        function onMapsheetChange() {
+            refreshDependentFilters();
+            buildRegistryTable();
         }
 
         // Quick report on how many records matched a photo, with a few sample
@@ -1372,7 +1427,7 @@
 
             let matched = 0;
             const unmatched = [];
-            const byMethod = { exact: 0, contains: 0, path: 0, hyperlink: 0 };
+            const byMethod = { exact: 0, contains: 0, path: 0, hyperlink: 0, folder: 0 };
             dbfData.records.forEach((rec, idx) => {
                 const m = resolveMatch(idx);
                 if (m && m.photo) { matched++; if (byMethod[m.method] !== undefined) byMethod[m.method]++; }
@@ -1389,7 +1444,8 @@
                 "<b>" + matched + "</b> / " + total + " records matched a photo (<b>" + pct + "%</b>).<br>" +
                 "Photos indexed: <b>" + photoIndex.length + "</b>.<br>" +
                 "By method — exact: " + byMethod.exact + ", fuzzy: " + byMethod.contains +
-                ", path: " + byMethod.path + ", link: " + byMethod.hyperlink + ".<br><br>" +
+                ", facility-folder: " + byMethod.folder + ", path: " + byMethod.path +
+                ", link: " + byMethod.hyperlink + ".<br><br>" +
                 '<div class="text-left"><b>Sample UNMATCHED references:</b><br>' +
                 '<span class="font-mono text-[10px] text-amber-300">' + sampleUnmatched + '</span><br><br>' +
                 '<b>Sample photo filenames:</b><br>' +
