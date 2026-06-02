@@ -59,7 +59,7 @@
                     <span id="app-version" class="bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold"></span>
                 </h1>
                 <p class="text-xs text-slate-400 mt-1">GitHub Pages Edition • Fully client-side GIS & photo plate audit tool</p>
-                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.4.2.zip" download
+                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.5.0.zip" download
                    class="inline-flex items-center gap-1.5 mt-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-semibold px-3 py-1.5 rounded-lg transition">
                     ⬇️ Download offline version (.zip)
                 </a>
@@ -152,6 +152,13 @@
                         <label class="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer select-none">
                             <input type="checkbox" id="hide-unmatched" checked onchange="searchAndFilter()" class="accent-sky-500"> Hide unmatched
                         </label>
+                        <label class="flex items-center gap-1 text-[11px] text-slate-400 select-none" title="Pause between AI requests during batch verification (helps avoid free-tier rate limits)">
+                            Delay
+                            <input type="number" id="req-delay" min="0" step="0.5" value="1" onchange="saveSettings()" class="w-12 bg-slate-950 border border-slate-800 px-1.5 py-1 rounded text-xs text-white text-center focus:outline-none focus:border-sky-500"> s
+                        </label>
+                        <label class="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer select-none" title="On a rate/quota limit (HTTP 429), wait and retry automatically instead of stopping">
+                            <input type="checkbox" id="auto-retry" checked onchange="saveSettings()" class="accent-sky-500"> Auto-retry
+                        </label>
                         <button id="audit-filtered-btn" onclick="runAutoAudit()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1 rounded transition font-bold">Audit Filtered</button>
                         <button onclick="showMatchDiagnostics()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs px-3 py-1 rounded transition font-bold">🔍 Match Check</button>
                         <button onclick="exportExcel()" class="bg-slate-700 hover:bg-slate-600 text-white text-xs px-3 py-1 rounded transition font-bold">Export Excel</button>
@@ -232,8 +239,8 @@
     <script>
         // App version — bump this whenever index.html changes so you can confirm
         // the deployed/cached page matches the latest build (also logged to console).
-        const APP_VERSION = "v1.4.2";
-        const APP_BUILD_DATE = "2026-06-03 03:38 HKT";
+        const APP_VERSION = "v1.5.0";
+        const APP_BUILD_DATE = "2026-06-03 06:47 HKT";
 
         // --- Access gate ---------------------------------------------------------
         // Client-side access lock. The passphrase is verified by deriving a salted
@@ -417,13 +424,15 @@
         // --- Settings persistence (localStorage) ---------------------------------
         // The Gemini key, LM Studio URL and chosen engine are remembered between
         // sessions so they don't have to be re-entered each time.
-        const LS_KEYS = { mode: 'eif_engine_mode', url: 'eif_api_url', key: 'eif_gemini_key' };
+        const LS_KEYS = { mode: 'eif_engine_mode', url: 'eif_api_url', key: 'eif_gemini_key', delay: 'eif_req_delay', retry: 'eif_auto_retry' };
 
         function saveSettings() {
             try {
                 localStorage.setItem(LS_KEYS.mode, document.getElementById('engine-mode').value);
                 localStorage.setItem(LS_KEYS.url, document.getElementById('api-url').value);
                 localStorage.setItem(LS_KEYS.key, document.getElementById('gemini-key').value);
+                localStorage.setItem(LS_KEYS.delay, document.getElementById('req-delay').value);
+                localStorage.setItem(LS_KEYS.retry, document.getElementById('auto-retry').checked ? "1" : "0");
             } catch (e) { /* storage may be disabled; ignore */ }
         }
 
@@ -432,9 +441,13 @@
                 const mode = localStorage.getItem(LS_KEYS.mode);
                 const url = localStorage.getItem(LS_KEYS.url);
                 const key = localStorage.getItem(LS_KEYS.key);
+                const delay = localStorage.getItem(LS_KEYS.delay);
+                const retry = localStorage.getItem(LS_KEYS.retry);
                 if (mode) document.getElementById('engine-mode').value = mode;
                 if (url) document.getElementById('api-url').value = url;
                 if (key) document.getElementById('gemini-key').value = key;
+                if (delay !== null) document.getElementById('req-delay').value = delay;
+                if (retry !== null) document.getElementById('auto-retry').checked = (retry === "1");
             } catch (e) { /* ignore */ }
         }
 
@@ -1099,6 +1112,25 @@
                 /quota|rate.?limit|resource[_ ]?exhausted|exceed|too many requests/.test(msg);
         }
 
+        // Parse a Google "retryDelay" like "27s" or "1.5s" into milliseconds.
+        function parseRetryDelay(v) {
+            if (!v) return 0;
+            const m = String(v).match(/([\d.]+)\s*s/i);
+            return m ? Math.round(parseFloat(m[1]) * 1000) : 0;
+        }
+
+        // Sleep that wakes early if the batch is aborted, so Stop stays responsive
+        // even during a long back-off wait.
+        async function abortableSleep(ms) {
+            const step = 200;
+            let waited = 0;
+            while (waited < ms) {
+                if (auditAbort) return;
+                await new Promise(r => setTimeout(r, Math.min(step, ms - waited)));
+                waited += step;
+            }
+        }
+
         // Core audit: calls the model, stores the result, and THROWS on failure (with an
         // .status on HTTP errors). No modals/among-UI side effects — callers decide how
         // to report, so batch runs don't spam an alert per failed record.
@@ -1138,9 +1170,15 @@
                     })
                 });
                 if (!response.ok) {
-                    let msg = "Google Cloud language endpoint error.";
-                    try { const errData = await response.json(); msg = (errData && errData.error && errData.error.message) || msg; } catch (e) { /* ignore */ }
-                    const e = new Error(msg); e.status = response.status; throw e;
+                    let msg = "Google Cloud language endpoint error.", retryMs = 0;
+                    try {
+                        const errData = await response.json();
+                        msg = (errData && errData.error && errData.error.message) || msg;
+                        const details = (errData && errData.error && errData.error.details) || [];
+                        for (const d of details) { if (d && d.retryDelay) retryMs = parseRetryDelay(d.retryDelay); }
+                    } catch (e) { /* ignore */ }
+                    if (!retryMs) retryMs = parseRetryDelay((response.headers.get('Retry-After') || "") + "s");
+                    const e = new Error(msg); e.status = response.status; e.retryAfterMs = retryMs; throw e;
                 }
                 const data = await response.json();
                 aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
@@ -1226,6 +1264,11 @@
             const progress = document.getElementById('audit-progress');
             progress.classList.remove('hidden');
 
+            // Batch pacing settings (persisted): per-request delay + auto-retry on limits.
+            const baseDelayMs = Math.max(0, (parseFloat(document.getElementById('req-delay').value) || 0) * 1000);
+            const autoRetry = document.getElementById('auto-retry').checked;
+            const MAX_RETRIES = autoRetry ? 5 : 0;
+
             let successCount = 0, failCount = 0, consecutive = 0;
             let stopReason = null, lastErr = null;
             for (let i = 0; i < targets.length; i++) {
@@ -1234,22 +1277,41 @@
                 const idx = item.originalIndex;
                 const eif = getRecordId(item.record, idx);
                 const m = resolveMatch(idx);
-                progress.innerText = "Auditing " + (i + 1) + " / " + targets.length + "…";
-                try {
-                    const base64Data = await getBase64OfPhoto(m.photo);
-                    await performAudit(eif, item.record.FAC_TYPE, base64Data, getPhotoMime(m.photo));
-                    successCount++; consecutive = 0;
-                    buildRegistryTable();
-                } catch (e) {
-                    console.error(e);
-                    failCount++; consecutive++; lastErr = e;
-                    // A quota/rate limit won't clear by trying the next record — stop now
-                    // (one message) instead of failing every remaining row.
-                    if (isQuotaError(e)) { stopReason = 'quota'; break; }
-                    if (consecutive >= 5) { stopReason = 'errors'; break; }
+
+                let attempt = 0, ok = false;
+                while (true) {
+                    if (auditAbort) { stopReason = 'user'; break; }
+                    progress.innerText = "Auditing " + (i + 1) + " / " + targets.length + "…" + (attempt ? " (retry " + attempt + ")" : "");
+                    try {
+                        const base64Data = await getBase64OfPhoto(m.photo);
+                        await performAudit(eif, item.record.FAC_TYPE, base64Data, getPhotoMime(m.photo));
+                        successCount++; consecutive = 0; ok = true;
+                        buildRegistryTable();
+                        break;
+                    } catch (e) {
+                        lastErr = e;
+                        // On a rate/quota limit, wait (honouring the server's suggested
+                        // delay, else exponential back-off) and retry the SAME record.
+                        if (isQuotaError(e) && attempt < MAX_RETRIES && !auditAbort) {
+                            attempt++;
+                            const wait = e.retryAfterMs || Math.min(60000, 2000 * Math.pow(2, attempt - 1));
+                            const secs = Math.ceil(wait / 1000);
+                            for (let t = secs; t > 0 && !auditAbort; t--) {
+                                progress.innerText = "Rate limit — waiting " + t + "s, retry " + attempt + "/" + MAX_RETRIES + "…";
+                                await abortableSleep(1000);
+                            }
+                            continue;
+                        }
+                        console.error(e);
+                        failCount++; consecutive++;
+                        if (isQuotaError(e)) stopReason = 'quota';      // limit persisted after retries
+                        else if (consecutive >= 5) stopReason = 'errors';
+                        break;
+                    }
                 }
-                // Yield so the Stop button stays responsive; also throttles request rate.
-                await new Promise(r => setTimeout(r, 120));
+                if (stopReason) break;
+                // Pace requests (interruptible) to ease free-tier rate limits.
+                if (ok && baseDelayMs) await abortableSleep(baseDelayMs);
             }
 
             auditRunning = false;
@@ -1260,7 +1322,7 @@
             let title, msg, icon;
             if (stopReason === 'quota') {
                 title = "AI Limit Reached — Stopped"; icon = "🛑";
-                msg = "The AI service reported a rate/quota limit, so verification stopped automatically after <b>" + successCount + "</b> of " + targets.length + ".<br><br><span class='text-slate-400'>" + escapeHtml(lastErr ? lastErr.message : "") + "</span><br><br>Wait for the quota to reset (or switch the Model Engine), then click <b>Audit Filtered</b> again to resume — already-verified rows are skipped.";
+                msg = "The AI rate/quota limit persisted" + (MAX_RETRIES ? " after auto-retries" : "") + ", so verification stopped after <b>" + successCount + "</b> of " + targets.length + ".<br><br><span class='text-slate-400'>" + escapeHtml(lastErr ? lastErr.message : "") + "</span><br><br>Wait for the quota to reset (raise the <b>Delay</b>, or switch the Model Engine), then click <b>Audit Filtered</b> again to resume — already-verified rows are skipped.";
             } else if (stopReason === 'errors') {
                 title = "Verification Stopped"; icon = "❌";
                 msg = "Stopped after repeated errors. Verified <b>" + successCount + "</b> of " + targets.length + ".<br><br><span class='text-slate-400'>" + escapeHtml(lastErr ? lastErr.message : "") + "</span>";
