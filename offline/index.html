@@ -24,14 +24,28 @@
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-sky-500 selection:text-white">
 
-    <!-- Passphrase Gate (access lock) -->
+    <!-- Access Gate -->
     <div id="gate" class="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950 p-4">
         <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-sm w-full p-8 shadow-2xl flex flex-col items-center text-center gap-4">
             <span class="text-4xl">🔒</span>
             <h2 class="text-lg font-bold text-white">Authorized Access Only</h2>
             <p class="text-xs text-slate-400 leading-relaxed">This workspace and its data are restricted to authorized personnel only. Access or use by unauthorized persons is strictly prohibited. Enter the access passphrase to continue.</p>
-            <input type="password" id="gate-input" placeholder="Access passphrase" class="w-full bg-slate-950 border border-slate-700 px-4 py-2.5 rounded-lg text-sm text-white focus:outline-none focus:border-sky-500" onkeydown="if(event.key==='Enter')unlock()">
-            <button onclick="unlock()" class="w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm py-2.5 rounded-lg transition">Enter</button>
+
+            <!-- Passphrase mode (default) -->
+            <div id="gate-pass" class="w-full flex flex-col gap-4">
+                <input type="password" id="gate-input" placeholder="Access passphrase" class="w-full bg-slate-950 border border-slate-700 px-4 py-2.5 rounded-lg text-sm text-white focus:outline-none focus:border-sky-500" onkeydown="if(event.key==='Enter')unlock()">
+                <button onclick="unlock()" class="w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm py-2.5 rounded-lg transition">Enter</button>
+            </div>
+
+            <!-- Microsoft SSO mode (shown only when Entra ID is configured below) -->
+            <div id="gate-sso" class="hidden w-full flex flex-col gap-3">
+                <button onclick="msalSignIn()" class="w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm py-2.5 rounded-lg transition flex items-center justify-center gap-2">
+                    <svg width="16" height="16" viewBox="0 0 21 21" aria-hidden="true"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>
+                    Sign in with Microsoft
+                </button>
+                <p id="gate-sso-status" class="text-[11px] text-slate-500"></p>
+            </div>
+
             <p id="gate-error" class="text-rose-400 text-xs hidden">Incorrect passphrase.</p>
         </div>
     </div>
@@ -45,7 +59,7 @@
                     <span id="app-version" class="bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold"></span>
                 </h1>
                 <p class="text-xs text-slate-400 mt-1">GitHub Pages Edition • Fully client-side GIS & photo plate audit tool</p>
-                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.3.4.zip" download
+                <a href="https://github.com/altezza938/eif/raw/main/eif-audit-offline-v1.4.0.zip" download
                    class="inline-flex items-center gap-1.5 mt-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-semibold px-3 py-1.5 rounded-lg transition">
                     ⬇️ Download offline version (.zip)
                 </a>
@@ -215,8 +229,8 @@
     <script>
         // App version — bump this whenever index.html changes so you can confirm
         // the deployed/cached page matches the latest build (also logged to console).
-        const APP_VERSION = "v1.3.4";
-        const APP_BUILD_DATE = "2026-06-03 03:14 HKT";
+        const APP_VERSION = "v1.4.0";
+        const APP_BUILD_DATE = "2026-06-03 03:20 HKT";
 
         // --- Access gate ---------------------------------------------------------
         // Client-side access lock. The passphrase is verified by deriving a salted
@@ -261,6 +275,108 @@
                     : "Could not verify passphrase.";
                 errEl.classList.remove('hidden');
             }
+        }
+
+        // --- Microsoft Entra ID (Azure AD) single sign-on -------------------------
+        // OPTIONAL. Leave AUTH.clientId empty to keep the passphrase gate above.
+        // To enable corporate "Sign in with Microsoft" (the same Windows/AECOM login):
+        //   1. Ask AECOM IT to register a Single-Page Application in Microsoft Entra ID.
+        //   2. Set the SPA redirect URI to this page's exact URL
+        //      (e.g. https://altezza938.github.io/eif/).
+        //   3. Paste the Application (client) ID and Directory (tenant) ID below.
+        //   4. (Optional) restrict to specific security groups via allowedGroupIds —
+        //      requires adding the "groups" optional claim to the app's token config.
+        // See docs/ENTRA_SSO_SETUP.md for the full walkthrough.
+        // NOTE: a SPA gate controls who can sign in and use the app; it cannot hide the
+        // static page/source itself. For true data protection, front the site with an
+        // auth proxy (e.g. Cloudflare Access) or serve it from a backend.
+        const AUTH = {
+            clientId: "",                  // Application (client) ID from Entra
+            tenantId: "",                  // Directory (tenant) ID (or "organizations")
+            allowedGroupIds: [],           // optional: only these group object IDs may enter
+            msalCdn: "https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"
+        };
+
+        let msalApp = null;
+
+        function ssoStatus(msg) {
+            const el = document.getElementById('gate-sso-status');
+            if (el) el.textContent = msg || "";
+        }
+
+        function unlockApp() {
+            document.getElementById('gate').style.display = 'none';
+        }
+
+        // Decide which gate to show. Falls back to the passphrase gate whenever Entra is
+        // not configured or the MSAL library can't load (e.g. fully offline).
+        async function initAccessGate() {
+            if (!AUTH.clientId) {              // not configured -> passphrase gate
+                const gi = document.getElementById('gate-input');
+                if (gi) gi.focus();
+                return;
+            }
+            // Show the SSO UI, hide the passphrase UI.
+            document.getElementById('gate-pass').classList.add('hidden');
+            document.getElementById('gate-sso').classList.remove('hidden');
+            ssoStatus("Loading sign-in…");
+            try {
+                await loadScript(AUTH.msalCdn);
+                msalApp = new msal.PublicClientApplication({
+                    auth: {
+                        clientId: AUTH.clientId,
+                        authority: "https://login.microsoftonline.com/" + (AUTH.tenantId || "organizations"),
+                        redirectUri: window.location.href.split('#')[0]
+                    },
+                    cache: { cacheLocation: "sessionStorage" }
+                });
+                await msalApp.initialize();
+                // Complete any redirect coming back from Microsoft.
+                const result = await msalApp.handleRedirectPromise();
+                const account = (result && result.account) || msalApp.getAllAccounts()[0];
+                if (account) {
+                    completeSso(account);
+                } else {
+                    ssoStatus("Use your AECOM Microsoft account.");
+                }
+            } catch (e) {
+                // Offline or library blocked -> fall back to the passphrase gate.
+                console.error(e);
+                document.getElementById('gate-sso').classList.add('hidden');
+                document.getElementById('gate-pass').classList.remove('hidden');
+                const gi = document.getElementById('gate-input');
+                if (gi) gi.focus();
+            }
+        }
+
+        function msalSignIn() {
+            if (!msalApp) return;
+            msalApp.loginRedirect({ scopes: ["openid", "profile"], prompt: "select_account" });
+        }
+
+        // Validate the signed-in account (tenant + optional group membership) and enter.
+        function completeSso(account) {
+            if (AUTH.tenantId && account.tenantId && account.tenantId !== AUTH.tenantId) {
+                ssoStatus("This account is not in the authorized organization.");
+                return;
+            }
+            if (AUTH.allowedGroupIds.length) {
+                const groups = (account.idTokenClaims && account.idTokenClaims.groups) || [];
+                const ok = AUTH.allowedGroupIds.some(g => groups.includes(g));
+                if (!ok) { ssoStatus("Your account is not in an authorized group."); return; }
+            }
+            unlockApp();
+        }
+
+        // Inject an external script once and resolve when it has loaded.
+        function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = src; s.async = true;
+                s.onload = resolve;
+                s.onerror = () => reject(new Error("Failed to load " + src));
+                document.head.appendChild(s);
+            });
         }
 
         let dbfData = null;
@@ -354,8 +470,8 @@
                 document.getElementById(id).addEventListener('change', saveSettings);
             });
 
-            const gateInput = document.getElementById('gate-input');
-            if (gateInput) gateInput.focus();
+            // Choose passphrase vs Microsoft SSO based on the AUTH config above.
+            initAccessGate();
         });
 
         // Stable Gemini model id. Dated preview aliases (e.g. *-preview-09-2025) get
